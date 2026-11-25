@@ -3,6 +3,7 @@ mod chats_claude;
 mod chats_codex;
 mod chats_remote;
 mod claude;
+mod cloud_claude;
 mod codex;
 mod codex_live;
 mod model;
@@ -22,13 +23,15 @@ use tokio::sync::Mutex;
 struct Sources {
     claude: Mutex<claude::ClaudeSource>,
     codex: Mutex<codex_live::CodexLive>,
+    cloud: Mutex<cloud_claude::CloudClaude>,
 }
 
 #[tauri::command]
 async fn snapshot(sources: State<'_, Sources>) -> Result<Snapshot, String> {
     let claude = sources.claude.lock().await.read().await;
-    let (codex_local, (environments, projects)) = tauri::async_runtime::spawn_blocking(|| {
-        (codex::read(), chats::read_all(SystemTime::now()))
+    let cloud = sources.cloud.lock().await.read().await;
+    let (codex_local, (environments, projects)) = tauri::async_runtime::spawn_blocking(move || {
+        (codex::read(), chats::read_all(SystemTime::now(), cloud))
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -223,6 +226,7 @@ pub fn run() {
         .manage(Sources {
             claude: Mutex::new(claude::ClaudeSource::new()),
             codex: Mutex::new(codex_live::CodexLive::new()),
+            cloud: Mutex::new(cloud_claude::CloudClaude::new()),
         })
         .setup(|app| {
             #[cfg(target_os = "macos")]

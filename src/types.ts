@@ -70,7 +70,7 @@ export interface Project {
   moreCrew: number;
 }
 
-export type EnvKind = "local" | "ssh";
+export type EnvKind = "local" | "ssh" | "cloud";
 
 export interface Environment {
   id: string;

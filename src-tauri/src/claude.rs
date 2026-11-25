@@ -519,6 +519,31 @@ fn tokens_last_5h(projects: &Path) -> u64 {
     total
 }
 
+/// Current OAuth access token (already refreshed by `ClaudeSource::read` when
+/// needed). Only used to call Anthropic.
+pub fn access_token() -> Option<String> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let path = config_dir()?.join(".credentials.json");
+        read_file_credentials(&path).ok().map(|(_, oauth)| oauth.access_token)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        read_credentials().ok().map(|oauth| oauth.access_token)
+    }
+}
+
+/// Organization of the signed-in account, from Claude Code's `.claude.json`.
+pub fn organization_uuid() -> Option<String> {
+    let file = match std::env::var("CLAUDE_CONFIG_DIR") {
+        Ok(dir) => PathBuf::from(dir).join(".claude.json"),
+        Err(_) => dirs::home_dir()?.join(".claude.json"),
+    };
+    let value: Value = serde_json::from_str(&fs::read_to_string(file).ok()?).ok()?;
+    value["oauthAccount"]["organizationUuid"].as_str().map(str::to_owned)
+}
+
+
 #[cfg(all(test, not(target_os = "macos")))]
 mod tests {
     use super::*;

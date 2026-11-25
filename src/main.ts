@@ -20,6 +20,7 @@ let firstPaint = true;
 
 // Which environment tab is open ("all" or an environment id), remembered per viewer.
 const ENV_KEY = "agent-gauge.env";
+const ALL_TAB_MAX = 4;
 let envFilter = (() => {
   try {
     return localStorage.getItem(ENV_KEY) ?? "all";
@@ -154,7 +155,16 @@ function projectsFor(s: Snapshot): string {
   const multi = new Set(s.projects.map((p) => p.envId)).size > 1;
   const envName = (p: Project) =>
     envFilter === "all" && multi ? s.environments.find((e) => e.id === p.envId)?.name : undefined;
-  return list.map((p) => project(p, envName(p))).join("");
+  // "Todos" stays short: awake projects first, the rest live in their own tab.
+  const shown =
+    envFilter === "all"
+      ? [...list].sort((a, b) => Number(a.asleep) - Number(b.asleep)).slice(0, ALL_TAB_MAX)
+      : list;
+  const hidden = list.length - shown.length;
+  return (
+    shown.map((p) => project(p, envName(p))).join("") +
+    (hidden > 0 ? `<p class="more-projects">${hidden} más dormidos: elige un entorno arriba para verlos.</p>` : "")
+  );
 }
 
 function render(s: Snapshot, prev: Snapshot | null) {

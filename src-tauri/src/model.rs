@@ -135,6 +135,7 @@ pub struct Project {
 pub enum EnvKind {
     Local,
     Ssh,
+    Cloud,
 }
 
 #[derive(Debug, Clone, Serialize)]

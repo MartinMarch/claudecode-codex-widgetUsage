@@ -162,8 +162,10 @@ fn subagent_members(agents: Vec<Subagent>, kind: CrewKind) -> impl Iterator<Item
     })
 }
 
-pub fn read_all(now: SystemTime) -> (Vec<Environment>, Vec<Project>) {
+/// `cloud` are Claude sessions in Anthropic's cloud (see `cloud_claude`), read async by the caller.
+pub fn read_all(now: SystemTime, cloud: Vec<Chat>) -> (Vec<Environment>, Vec<Project>) {
     let mut all = claude::config_dir().map_or_else(Vec::new, |root| chats_claude::read(&root, now));
+    all.extend(cloud);
     if let Some(home) = codex::home() {
         all.extend(chats_codex::read(&home, now));
     }
@@ -182,6 +184,13 @@ pub fn read_all(now: SystemTime) -> (Vec<Environment>, Vec<Project>) {
             .into_iter()
             .filter(|env| projects.iter().any(|project| project.env_id == env.id)),
     );
+    if projects.iter().any(|project| project.env_id == "cloud") {
+        environments.push(Environment {
+            id: "cloud".into(),
+            name: "Nube".into(),
+            kind: EnvKind::Cloud,
+        });
+    }
     (environments, projects)
 }
 
