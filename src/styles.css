@@ -4,7 +4,8 @@
 :root {
   /* Glass */
   --glass: rgba(22, 28, 48, 0.8);          /* no native blur (Linux): carry the tint ourselves */
-  --glass-native: rgba(18, 22, 36, 0.22);  /* macOS vibrancy / Windows acrylic underneath: let it show */
+  --glass-native: rgba(18, 22, 36, 0.22);  /* native blur underneath: let it show */
+  --glass-focus: rgba(18, 22, 36, 0.62);   /* while the widget has focus: easier to read */
   --rim: rgba(255, 255, 255, 0.12);
   --rim-top: rgba(255, 255, 255, 0.26);
   /* Thin glass needs a lift so text reads over a bright desktop too. */
@@ -91,10 +92,12 @@ body[data-os="browser"] .widget {
 }
 
 body.native-blur .widget {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 38%),
-    var(--glass-native);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 38%);
+  background-color: var(--glass-native);
+  transition: background-color 0.3s ease;
 }
+/* See-through while you work elsewhere; more solid once you click into it. */
+body.native-blur.has-focus .widget { background-color: var(--glass-focus); }
 
 /* Film grain so the glass reads as a material, not a flat fill. */
 .widget::before {

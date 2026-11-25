@@ -24,6 +24,7 @@ pub fn group(all: Vec<Chat>) -> Vec<Project> {
             .or_default()
             .push(chat);
     }
+    adopt_nested(&mut folders);
     let mut projects: Vec<_> = folders
         .into_iter()
         .map(|(id, chats)| project(id.unwrap_or_else(|| "sin-carpeta".into()), chats))
@@ -31,6 +32,40 @@ pub fn group(all: Vec<Chat>) -> Vec<Project> {
     projects.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
     projects.truncate(MAX_PROJECTS);
     projects
+}
+
+/// `child` is `parent` or a folder inside it (paths already normalized).
+fn nested(parent: &str, child: &str) -> bool {
+    child
+        .strip_prefix(parent)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(['\\', '/']))
+}
+
+/// A folder with no Claude chat joins the closest Claude project above or
+/// below it, so a Codex that Claude started from a subfolder (or the repo
+/// root) lands under that Claude instead of showing as a separate project.
+fn adopt_nested(folders: &mut BTreeMap<Option<String>, Vec<Chat>>) {
+    let has_boss = |chats: &Vec<Chat>| chats.iter().any(|c| c.provider == Provider::Claude);
+    let bosses: Vec<String> = folders
+        .iter()
+        .filter(|(_, chats)| has_boss(chats))
+        .filter_map(|(key, _)| key.clone())
+        .collect();
+    let orphans: Vec<String> = folders
+        .iter()
+        .filter(|(_, chats)| !has_boss(chats))
+        .filter_map(|(key, _)| key.clone())
+        .collect();
+    for orphan in orphans {
+        let home = bosses
+            .iter()
+            .filter(|boss| nested(boss, &orphan) || nested(&orphan, boss))
+            .max_by_key(|boss| boss.len());
+        if let Some(home) = home {
+            let chats = folders.remove(&Some(orphan)).unwrap_or_default();
+            folders.entry(Some(home.clone())).or_default().extend(chats);
+        }
+    }
 }
 
 fn project(id: String, mut chats: Vec<Chat>) -> Project {
@@ -142,6 +177,23 @@ mod tests {
             subagents: vec![],
             more_subagents: 0,
         }
+    }
+
+    #[test]
+    fn codex_in_parent_or_child_folder_joins_the_claude_project() {
+        let mut claude = chat(5, Provider::Claude);
+        claude.cwd = Some(r"C:\Code\App\src-tauri".into());
+        let mut root = chat(3, Provider::Codex);
+        root.cwd = Some(r"C:\Code\App".into());
+        let mut deeper = chat(4, Provider::Codex);
+        deeper.cwd = Some(r"C:\Code\App\src-tauri\src".into());
+        let mut other = chat(2, Provider::Codex);
+        other.cwd = Some(r"C:\Code\Apple".into());
+        let projects = group(vec![claude, root, deeper, other]);
+        assert_eq!(projects.len(), 2, "C:\\Code\\Apple is not inside C:\\Code\\App");
+        let app = projects.iter().find(|p| p.boss.is_some()).unwrap();
+        assert_eq!(app.crew.len(), 2);
+        assert!(projects.iter().any(|p| p.boss.is_none() && p.name == "Apple"));
     }
 
     #[test]

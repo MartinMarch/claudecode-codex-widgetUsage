@@ -197,6 +197,11 @@ fetchPlatform().then((p) => {
   document.body.dataset.os = p.os;
   document.body.classList.toggle("native-blur", p.nativeBlur);
 });
+// Focus decides how solid the glass is (see `.has-focus` in styles.css).
+const setFocus = () => document.body.classList.toggle("has-focus", document.hasFocus());
+window.addEventListener("focus", setFocus);
+window.addEventListener("blur", setFocus);
+setFocus();
 tick();
 setInterval(tick, POLL_MS);
 // Countdowns and "updated" text without re-reading data.

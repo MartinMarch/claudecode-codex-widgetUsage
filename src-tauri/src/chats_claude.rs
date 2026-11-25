@@ -1,5 +1,5 @@
 use crate::model::{Chat, Provider, Subagent};
-use crate::tail::{activity, folder_name, read_tail, TAIL_BYTES};
+use crate::tail::{activity, folder_name, read_head, read_tail, TAIL_BYTES};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -30,6 +30,11 @@ fn read_chat(path: &Path, project: &str, now: SystemTime) -> Option<Chat> {
     }
     let id = path.file_stem()?.to_str()?.to_owned();
     let (last_activity, working) = activity(path, now)?;
+    // The folder the chat started in names its project. Later lines follow the
+    // agent's `cd`s into subfolders, which would split one project in two.
+    let start_cwd = read_head(path, TAIL_BYTES).lines().find_map(|line| {
+        serde_json::from_str::<Value>(line).ok()?["cwd"].as_str().map(str::to_owned)
+    });
     let mut cwd = None;
     let mut title = None;
     let mut context_percent = None;
@@ -72,6 +77,7 @@ fn read_chat(path: &Path, project: &str, now: SystemTime) -> Option<Chat> {
         }
     }
 
+    let cwd = start_cwd.or(cwd);
     Some(Chat {
         title: title.unwrap_or_else(|| {
             cwd.as_deref()
@@ -207,6 +213,14 @@ mod tests {
         assert_eq!(chats.len(), 1);
         assert_eq!(chats[0].title, "proj");
         assert_eq!(chats[0].context_percent, None);
+    }
+
+    #[test]
+    fn project_folder_is_where_the_chat_started() {
+        let f = Fixture::new("cd");
+        let later = ASSISTANT.replace(r"C:\\x\\proj", r"C:\\x\\proj\\src-tauri");
+        f.write("chat.jsonl", &format!("{USER}\n{later}\n"), 0);
+        assert_eq!(f.read()[0].cwd.as_deref(), Some(r"C:\x\proj"));
     }
 
     #[test]

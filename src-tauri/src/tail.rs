@@ -27,6 +27,19 @@ pub fn read_tail(path: &Path, max_bytes: u64) -> String {
     String::from_utf8_lossy(&bytes(path, max_bytes).unwrap_or_default()).into_owned()
 }
 
+/// First `max_bytes` of the file, lossy UTF-8, with a trailing partial line dropped.
+pub fn read_head(path: &Path, max_bytes: u64) -> String {
+    let mut bytes = Vec::new();
+    if let Ok(file) = File::open(path) {
+        let _ = file.take(max_bytes).read_to_end(&mut bytes);
+    }
+    if bytes.len() as u64 == max_bytes {
+        let keep = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+        bytes.truncate(keep);
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
 pub fn modified_secs_ago(path: &Path, now: SystemTime) -> Option<u64> {
     let modified = fs::metadata(path).ok()?.modified().ok()?;
     Some(now.duration_since(modified).unwrap_or_default().as_secs())

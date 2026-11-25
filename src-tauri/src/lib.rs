@@ -73,6 +73,40 @@ fn round_corners(window: &WebviewWindow) {
     }
 }
 
+/// Windows 11 turns the acrylic backdrop into a flat colour whenever the
+/// window is inactive. The widget lives unfocused, so we answer every
+/// WM_NCACTIVATE as "active": the frame (and its acrylic) never goes dull.
+/// Real keyboard focus is untouched; the page tracks it on its own.
+#[cfg(target_os = "windows")]
+fn keep_frame_active(window: &WebviewWindow) {
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+    use windows_sys::Win32::UI::WindowsAndMessaging::WM_NCACTIVATE;
+
+    unsafe extern "system" fn proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _id: usize,
+        _data: usize,
+    ) -> LRESULT {
+        // SAFETY: forwarding to the next handler in the subclass chain.
+        unsafe {
+            if msg == WM_NCACTIVATE {
+                return DefSubclassProc(hwnd, msg, 1, lparam);
+            }
+            DefSubclassProc(hwnd, msg, wparam, lparam)
+        }
+    }
+
+    let Ok(hwnd) = window.hwnd() else { return };
+    // SAFETY: valid window handle owned by this thread's process; `proc` lives for the program.
+    unsafe {
+        SetWindowSubclass(hwnd.0 as _, Some(proc), 1, 0);
+    }
+}
+
 fn apply_glass(window: &WebviewWindow) -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -89,6 +123,7 @@ fn apply_glass(window: &WebviewWindow) -> bool {
     {
         use window_vibrancy::{apply_acrylic, apply_blur};
         round_corners(window);
+        keep_frame_active(window);
         // On Windows 11 the system acrylic ignores this tint and follows the window
         // theme instead, so the window is pinned to the dark theme in tauri.conf.json;
         // otherwise a light Windows theme washes the glass out grey.
