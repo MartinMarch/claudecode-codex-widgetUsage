@@ -15,25 +15,32 @@ pub fn read(root: &Path, now: SystemTime) -> Vec<Chat> {
             continue;
         };
         let project_name = project.file_name();
+        let project_name = project_name.to_string_lossy();
+        let env_id = project_name
+            .strip_prefix("ssh-")
+            .and_then(crate::chats_remote::host_for_cli_session)
+            .map_or_else(|| "local".to_owned(), |host| format!("ssh:{host}"));
         chats.extend(
             files
                 .flatten()
-                .filter_map(|file| read_chat(&file.path(), &project_name.to_string_lossy(), now)),
+                .filter_map(|file| read_chat(&file.path(), &project_name, &env_id, now)),
         );
     }
     chats
 }
 
-fn read_chat(path: &Path, project: &str, now: SystemTime) -> Option<Chat> {
+fn read_chat(path: &Path, project: &str, env_id: &str, now: SystemTime) -> Option<Chat> {
     if path.extension()?.to_str()? != "jsonl" || !path.is_file() {
         return None;
     }
     let id = path.file_stem()?.to_str()?.to_owned();
-    let (last_activity, working) = activity(path, now)?;
+    let (last_activity, working, asleep) = activity(path, now)?;
     // The folder the chat started in names its project. Later lines follow the
     // agent's `cd`s into subfolders, which would split one project in two.
     let start_cwd = read_head(path, TAIL_BYTES).lines().find_map(|line| {
-        serde_json::from_str::<Value>(line).ok()?["cwd"].as_str().map(str::to_owned)
+        serde_json::from_str::<Value>(line).ok()?["cwd"]
+            .as_str()
+            .map(str::to_owned)
     });
     let mut cwd = None;
     let mut title = None;
@@ -89,10 +96,12 @@ fn read_chat(path: &Path, project: &str, now: SystemTime) -> Option<Chat> {
         }),
         subagents: read_subagents(&path.with_extension("").join("subagents"), now),
         id,
+        env_id: env_id.to_owned(),
         provider: Provider::Claude,
         cwd,
         last_activity,
         working,
+        asleep,
         from_claude: false,
         context_percent,
         context_approx,
@@ -112,14 +121,12 @@ fn read_subagents(dir: &Path, now: SystemTime) -> Vec<Subagent> {
                 return None;
             }
             let id = path.file_stem()?.to_str()?.strip_prefix("agent-")?;
-            let (last_activity, working) = activity(&path, now)?;
+            let (last_activity, working, asleep) = activity(&path, now)?;
             let meta: Value = fs::read(path.with_extension("meta.json"))
                 .ok()
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())
                 .unwrap_or_default();
-            if meta["finished"].as_bool() == Some(true) {
-                return None;
-            }
+            let finished = meta["finished"].as_bool() == Some(true);
             let kind = meta["agentType"].as_str();
             Some(Subagent {
                 id: id.to_owned(),
@@ -130,7 +137,8 @@ fn read_subagents(dir: &Path, now: SystemTime) -> Vec<Subagent> {
                     .to_owned(),
                 kind: kind.map(str::to_owned),
                 last_activity,
-                working,
+                working: working && !finished,
+                asleep: asleep || finished,
             })
         })
         .collect()
@@ -203,7 +211,7 @@ mod tests {
     #[test]
     fn old_chat_is_not_listed() {
         let f = Fixture::new("old");
-        f.write("chat.jsonl", ASSISTANT, 601);
+        f.write("chat.jsonl", ASSISTANT, 90_000);
         assert!(f.read().is_empty());
     }
 
@@ -263,8 +271,12 @@ mod tests {
         );
         let chats = f.read();
         let agents = &chats[0].subagents;
-        assert_eq!(agents.len(), 1);
-        assert_eq!(agents[0].name, "Buscar tests");
-        assert_eq!(agents[0].kind.as_deref(), Some("Explore"));
+        assert_eq!(agents.len(), 2);
+        let running = agents.iter().find(|agent| agent.id == "a").unwrap();
+        assert_eq!(running.name, "Buscar tests");
+        assert_eq!(running.kind.as_deref(), Some("Explore"));
+        assert!(running.working && !running.asleep);
+        let finished = agents.iter().find(|agent| agent.id == "b").unwrap();
+        assert!(finished.asleep && !finished.working);
     }
 }

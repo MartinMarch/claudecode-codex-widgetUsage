@@ -1,6 +1,6 @@
 use crate::codex::recent_session_files;
 use crate::model::{Chat, Provider, Subagent};
-use crate::tail::{activity, folder_name, read_tail, ACTIVE_SECS, TAIL_BYTES};
+use crate::tail::{activity, folder_name, read_tail, LIST_SECS, TAIL_BYTES};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::File;
@@ -12,7 +12,7 @@ pub fn read(home: &Path, now: SystemTime) -> Vec<Chat> {
     let mut files = recent_session_files(&home.join("sessions"), 2)
         .into_iter()
         .take_while(|(modified, _)| {
-            now.duration_since(*modified).unwrap_or_default().as_secs() <= ACTIVE_SECS
+            now.duration_since(*modified).unwrap_or_default().as_secs() <= LIST_SECS
         })
         .peekable();
     if files.peek().is_none() {
@@ -50,6 +50,7 @@ pub fn read(home: &Path, now: SystemTime) -> Vec<Chat> {
                         kind: None,
                         last_activity: chat.last_activity.clone(),
                         working: chat.working,
+                        asleep: chat.asleep,
                     };
                     sessions[root].0.subagents.push(agent);
                     attached[index] = true;
@@ -90,7 +91,7 @@ fn read_session(
     if !path.is_file() {
         return None;
     }
-    let (last_activity, working) = activity(path, now)?;
+    let (last_activity, working, asleep) = activity(path, now)?;
     let mut first_line = Vec::new();
     BufReader::new(File::open(path).ok()?.take(TAIL_BYTES))
         .read_until(b'\n', &mut first_line)
@@ -135,11 +136,13 @@ fn read_session(
     Some((
         Chat {
             id: id.to_owned(),
+            env_id: "local".into(),
             provider: Provider::Codex,
             title: title.to_owned(),
             cwd: cwd.map(str::to_owned),
             last_activity,
             working,
+            asleep,
             from_claude: payload["originator"].as_str() == Some("Claude Code"),
             context_percent,
             context_approx: false,
@@ -224,7 +227,7 @@ mod tests {
     #[test]
     fn orphan_subagent_is_its_own_row() {
         let f = Fixture::new("orphan");
-        f.session("rollout-p.jsonl", PARENT, 601);
+        f.session("rollout-p.jsonl", PARENT, 90_000);
         f.session("rollout-s.jsonl", CHILD, 0);
         let chats = read(&f.0, SystemTime::now());
         assert_eq!(chats.len(), 1);
@@ -235,7 +238,7 @@ mod tests {
     fn compressed_and_old_sessions_ignored() {
         let f = Fixture::new("ignored");
         f.session("rollout-archived.jsonl.zst", PARENT, 0);
-        f.session("rollout-old.jsonl", PARENT, 601);
+        f.session("rollout-old.jsonl", PARENT, 90_000);
         assert!(read(&f.0, SystemTime::now()).is_empty());
     }
 }

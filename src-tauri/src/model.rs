@@ -73,17 +73,20 @@ pub struct Subagent {
     pub kind: Option<String>,
     pub last_activity: String,
     pub working: bool,
+    pub asleep: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Chat {
     pub id: String,
+    pub env_id: String,
     pub provider: Provider,
     pub title: String,
     pub cwd: Option<String>,
     pub last_activity: String,
     pub working: bool,
+    pub asleep: bool,
     pub from_claude: bool,
     pub context_percent: Option<f64>,
     pub context_approx: bool,
@@ -107,6 +110,7 @@ pub struct CrewMember {
     pub kind: CrewKind,
     pub name: String,
     pub working: bool,
+    pub asleep: bool,
     pub context_percent: Option<f64>,
     pub last_activity: String,
 }
@@ -115,13 +119,30 @@ pub struct CrewMember {
 #[serde(rename_all = "camelCase")]
 pub struct Project {
     pub id: String,
+    pub env_id: String,
     pub name: String,
     pub cwd: Option<String>,
     pub last_activity: String,
     pub working: bool,
+    pub asleep: bool,
     pub boss: Option<Chat>,
     pub crew: Vec<CrewMember>,
     pub more_crew: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EnvKind {
+    Local,
+    Ssh,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Environment {
+    pub id: String,
+    pub name: String,
+    pub kind: EnvKind,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -130,5 +151,6 @@ pub struct Snapshot {
     pub claude: ProviderUsage,
     pub codex: ProviderUsage,
     pub projects: Vec<Project>,
+    pub environments: Vec<Environment>,
     pub taken_at: String,
 }

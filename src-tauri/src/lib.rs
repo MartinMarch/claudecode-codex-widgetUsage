@@ -27,7 +27,7 @@ struct Sources {
 #[tauri::command]
 async fn snapshot(sources: State<'_, Sources>) -> Result<Snapshot, String> {
     let claude = sources.claude.lock().await.read().await;
-    let (codex_local, projects) = tauri::async_runtime::spawn_blocking(|| {
+    let (codex_local, (environments, projects)) = tauri::async_runtime::spawn_blocking(|| {
         (codex::read(), chats::read_all(SystemTime::now()))
     })
     .await
@@ -40,6 +40,7 @@ async fn snapshot(sources: State<'_, Sources>) -> Result<Snapshot, String> {
         claude,
         codex,
         projects,
+        environments,
         taken_at: chrono::Utc::now().to_rfc3339(),
     })
 }

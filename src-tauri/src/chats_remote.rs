@@ -2,23 +2,24 @@
 //!
 //! When a Claude desktop chat works over SSH, Codex runs on that host and its
 //! logs stay there. The desktop app records each chat's `sshConfig` (host and
-//! key) in its session files; for chats active in the last 10 minutes we run
+//! key) in its session files; for chats active in the last 24 hours we run
 //! `remote_codex.sh` over SSH (key auth only, `BatchMode`, short timeout) and
 //! turn its metadata lines into `Chat`s. Results are cached per host.
 
-use crate::model::{Chat, Provider, Subagent};
-use crate::tail::{folder_name, ACTIVE_SECS, WORKING_SECS};
+use crate::model::{Chat, EnvKind, Environment, Provider, Subagent};
+use crate::tail::{folder_name, AWAKE_SECS, LIST_SECS, WORKING_SECS};
 use chrono::{SecondsFormat, TimeZone, Utc};
 use serde_json::Value;
-use std::collections::HashMap;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeSet, HashMap};
+use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const SCRIPT: &str = include_str!("remote_codex.sh");
 const CACHE_SECS: u64 = 30;
+const SESSION_CACHE_SECS: u64 = 60;
 const SSH_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,8 +33,12 @@ fn session_roots() -> Vec<PathBuf> {
     if let Ok(dir) = std::env::var("AGENT_GAUGE_CLAUDE_SESSIONS") {
         return vec![PathBuf::from(dir)];
     }
-    let Some(local) = dirs::data_local_dir() else { return vec![] };
-    let Ok(entries) = std::fs::read_dir(local.join("Claude-Data")) else { return vec![] };
+    let Some(local) = dirs::data_local_dir() else {
+        return vec![];
+    };
+    let Ok(entries) = std::fs::read_dir(local.join("Claude-Data")) else {
+        return vec![];
+    };
     entries
         .flatten()
         .map(|e| e.path().join("claude-code-sessions"))
@@ -48,12 +53,33 @@ fn expand_home(path: &str) -> PathBuf {
     }
 }
 
-/// SSH hosts of desktop chats active in the last `ACTIVE_SECS`, one per host.
-pub fn active_targets(roots: &[PathBuf], now_ms: i64) -> Vec<SshTarget> {
-    let mut out: Vec<SshTarget> = Vec::new();
+#[derive(Default)]
+struct SessionIndex {
+    hosts: HashMap<String, String>,
+    targets: Vec<(i64, SshTarget)>,
+}
+
+impl SessionIndex {
+    fn active_targets(&self, now_ms: i64) -> Vec<SshTarget> {
+        let mut seen = BTreeSet::new();
+        self.targets
+            .iter()
+            .filter(|(last, target)| {
+                now_ms.saturating_sub(*last) <= LIST_SECS as i64 * 1000
+                    && seen.insert(target.host.as_str())
+            })
+            .map(|(_, target)| target.clone())
+            .collect()
+    }
+}
+
+fn scan_sessions(roots: &[PathBuf]) -> SessionIndex {
+    let mut index = SessionIndex::default();
     let mut stack: Vec<(PathBuf, u8)> = roots.iter().map(|r| (r.clone(), 0)).collect();
     while let Some((dir, depth)) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -62,34 +88,58 @@ pub fn active_targets(roots: &[PathBuf], now_ms: i64) -> Vec<SshTarget> {
                 }
                 continue;
             }
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
             if !(name.starts_with("local_") && name.ends_with(".json")) {
                 continue;
             }
-            let Some(target) = target_from_file(&path, now_ms) else { continue };
-            if !out.iter().any(|t| t.host == target.host) {
-                out.push(target);
+            let Ok(raw) = std::fs::read(&path) else {
+                continue;
+            };
+            let Ok(session) = serde_json::from_slice::<Value>(&raw) else {
+                continue;
+            };
+            let ssh = &session["sshConfig"];
+            let Some(host) = ssh["sshHost"].as_str().filter(|host| !host.is_empty()) else {
+                continue;
+            };
+            if let Some(id) = session["cliSessionId"].as_str() {
+                index.hosts.insert(id.to_owned(), host.to_owned());
+            }
+            if let Some(last) = session["lastActivityAt"]
+                .as_i64()
+                .filter(|_| session["isArchived"].as_bool() != Some(true))
+            {
+                index.targets.push((
+                    last,
+                    SshTarget {
+                        host: host.to_owned(),
+                        identity: ssh["sshIdentityFile"].as_str().map(expand_home),
+                    },
+                ));
             }
         }
     }
-    out
+    index.targets.sort_by_key(|(last, _)| std::cmp::Reverse(*last));
+    index
 }
 
-fn target_from_file(path: &Path, now_ms: i64) -> Option<SshTarget> {
-    let v: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
-    let ssh = v.get("sshConfig")?;
-    let host = ssh["sshHost"].as_str().filter(|h| !h.is_empty())?;
-    if v["isArchived"].as_bool() == Some(true) {
-        return None;
+fn with_sessions<T>(f: impl FnOnce(&SessionIndex) -> T) -> T {
+    static SESSIONS: OnceLock<Mutex<(Instant, SessionIndex)>> = OnceLock::new();
+    let mut cached = SESSIONS
+        .get_or_init(|| Mutex::new((Instant::now(), scan_sessions(&session_roots()))))
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    if cached.0.elapsed().as_secs() >= SESSION_CACHE_SECS {
+        *cached = (Instant::now(), scan_sessions(&session_roots()));
     }
-    let last = v["lastActivityAt"].as_i64()?;
-    if now_ms - last > (ACTIVE_SECS as i64) * 1000 {
-        return None;
-    }
-    Some(SshTarget {
-        host: host.to_owned(),
-        identity: ssh["sshIdentityFile"].as_str().map(expand_home),
-    })
+    f(&cached.1)
+}
+
+pub fn host_for_cli_session(cli_session_id: &str) -> Option<String> {
+    with_sessions(|index| index.hosts.get(cli_session_id).cloned())
 }
 
 #[derive(Default)]
@@ -106,23 +156,32 @@ struct Session {
 }
 
 /// Turns `remote_codex.sh` output into chats, subagents nested under their parent.
-pub fn parse(output: &str) -> Vec<Chat> {
+pub fn parse(output: &str, host: &str) -> (Option<String>, Vec<Chat>) {
+    let mut hostname = None;
     let mut sessions: Vec<Session> = Vec::new();
     for line in output.lines() {
         let mut parts = line.splitn(3, '\t');
         match (parts.next(), parts.next(), parts.next()) {
+            (Some("H"), Some(name), None) if !name.trim().is_empty() => {
+                hostname.get_or_insert_with(|| name.trim().to_owned());
+            }
             (Some("F"), Some(m), Some(now)) => sessions.push(Session {
                 modified: m.trim().parse().unwrap_or_default(),
                 now: now.trim().parse().unwrap_or_default(),
                 ..Session::default()
             }),
             (Some("M"), Some(kv), None) => {
-                let Some(s) = sessions.last_mut() else { continue };
-                let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&format!("{{{kv}}}")) else {
+                let Some(s) = sessions.last_mut() else {
+                    continue;
+                };
+                let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&format!("{{{kv}}}"))
+                else {
                     continue;
                 };
                 for (key, value) in map {
-                    let Some(value) = value.as_str().map(str::to_owned) else { continue };
+                    let Some(value) = value.as_str().map(str::to_owned) else {
+                        continue;
+                    };
                     let slot = match key.as_str() {
                         "id" => &mut s.id,
                         "cwd" => &mut s.cwd,
@@ -135,8 +194,12 @@ pub fn parse(output: &str) -> Vec<Chat> {
                 }
             }
             (Some("T"), Some(kv), None) => {
-                let Some(s) = sessions.last_mut() else { continue };
-                let Some((key, n)) = kv.split_once(':') else { continue };
+                let Some(s) = sessions.last_mut() else {
+                    continue;
+                };
+                let Some((key, n)) = kv.split_once(':') else {
+                    continue;
+                };
                 let n = n.trim().parse::<u64>().ok();
                 match key.trim_matches('"') {
                     "input_tokens" => s.input_tokens = n,
@@ -159,10 +222,11 @@ pub fn parse(output: &str) -> Vec<Chat> {
     for s in sessions {
         let Some(id) = s.id.clone() else { continue };
         let age = s.now.saturating_sub(s.modified).max(0) as u64;
-        if age > ACTIVE_SECS {
+        if age > LIST_SECS {
             continue;
         }
         let working = age <= WORKING_SECS;
+        let asleep = age > AWAKE_SECS;
         if let Some(parent) = &s.parent {
             subs.push((
                 parent.clone(),
@@ -172,6 +236,7 @@ pub fn parse(output: &str) -> Vec<Chat> {
                     kind: None,
                     last_activity: stamp(s.modified),
                     working,
+                    asleep,
                 },
             ));
             // Also keep it as a chat, in case its parent is not active.
@@ -187,10 +252,12 @@ pub fn parse(output: &str) -> Vec<Chat> {
                 .or_else(|| s.cwd.as_deref().and_then(folder_name).map(str::to_owned))
                 .unwrap_or_else(|| "Codex".into()),
             id,
+            env_id: format!("ssh:{host}"),
             provider: Provider::Codex,
             cwd: s.cwd,
             last_activity: stamp(s.modified),
             working,
+            asleep,
             from_claude: s.originator.as_deref() == Some("Claude Code"),
             context_percent,
             context_approx: false,
@@ -208,16 +275,24 @@ pub fn parse(output: &str) -> Vec<Chat> {
             }
         }
     }
-    chats
+    (hostname, chats)
 }
 
 fn run_ssh(target: &SshTarget) -> Option<String> {
     let mut cmd = Command::new("ssh");
-    cmd.args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=4", "-o", "StrictHostKeyChecking=accept-new"]);
+    cmd.args([
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=4",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+    ]);
     if let Some(key) = &target.identity {
         cmd.arg("-i").arg(key);
     }
-    cmd.arg(&target.host)
+    cmd.arg("--")
+        .arg(&target.host)
         .arg("sh -s")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -228,9 +303,19 @@ fn run_ssh(target: &SshTarget) -> Option<String> {
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: no console flashing
     }
     let mut child = cmd.spawn().ok()?;
+    // Drain output concurrently so the 24-hour listing cannot fill the SSH pipe.
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut output = String::new();
+        stdout.read_to_string(&mut output).ok().map(|_| output)
+    });
     // A Windows checkout may turn the script's line endings into CRLF; sh needs LF.
     let script = SCRIPT.replace('\r', "");
-    child.stdin.take()?.write_all(script.as_bytes()).ok()?;
+    if child.stdin.take()?.write_all(script.as_bytes()).is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    }
     let started = Instant::now();
     loop {
         match child.try_wait() {
@@ -238,17 +323,22 @@ fn run_ssh(target: &SshTarget) -> Option<String> {
             Ok(Some(_)) | Err(_) => return None,
             Ok(None) if started.elapsed() > SSH_TIMEOUT => {
                 let _ = child.kill();
+                let _ = child.wait();
                 return None;
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),
         }
     }
-    let mut out = String::new();
-    std::io::Read::read_to_string(&mut child.stdout.take()?, &mut out).ok()?;
-    Some(out)
+    reader.join().ok().flatten()
 }
 
-type HostCache = Mutex<HashMap<String, (Instant, Vec<Chat>)>>;
+struct HostReading {
+    taken_at: Instant,
+    hostname: Option<String>,
+    chats: Vec<Chat>,
+}
+
+type HostCache = Mutex<HashMap<String, HostReading>>;
 
 fn cache() -> &'static HostCache {
     static CACHE: OnceLock<HostCache> = OnceLock::new();
@@ -258,16 +348,30 @@ fn cache() -> &'static HostCache {
 /// Active Codex chats on every SSH host a recent desktop chat is connected to.
 pub fn read(now_ms: i64) -> Vec<Chat> {
     let mut all = Vec::new();
-    for target in active_targets(&session_roots(), now_ms) {
-        let cached = cache()
-            .lock()
-            .ok()
-            .and_then(|c| c.get(&target.host).filter(|(t, _)| t.elapsed().as_secs() < CACHE_SECS).map(|(_, v)| v.clone()));
+    for target in with_sessions(|index| index.active_targets(now_ms)) {
+        let cached = cache().lock().ok().and_then(|c| {
+            c.get(&target.host)
+                .filter(|reading| reading.taken_at.elapsed().as_secs() < CACHE_SECS)
+                .map(|reading| reading.chats.clone())
+        });
         let chats = cached.unwrap_or_else(|| {
             // A host we cannot reach is remembered as empty for the cache period.
-            let chats = run_ssh(&target).map(|out| parse(&out)).unwrap_or_default();
+            let (hostname, chats) = run_ssh(&target)
+                .map(|out| parse(&out, &target.host))
+                .unwrap_or_default();
             if let Ok(mut c) = cache().lock() {
-                c.insert(target.host.clone(), (Instant::now(), chats.clone()));
+                let hostname = hostname.or_else(|| {
+                    c.get(&target.host)
+                        .and_then(|reading| reading.hostname.clone())
+                });
+                c.insert(
+                    target.host.clone(),
+                    HostReading {
+                        taken_at: Instant::now(),
+                        hostname,
+                        chats: chats.clone(),
+                    },
+                );
             }
             chats
         });
@@ -276,34 +380,115 @@ pub fn read(now_ms: i64) -> Vec<Chat> {
     all
 }
 
+pub fn environments() -> Vec<Environment> {
+    let mut hosts: BTreeSet<_> = with_sessions(|index| index.hosts.values().cloned().collect());
+    let names: HashMap<_, _> = cache()
+        .lock()
+        .map(|cache| {
+            hosts.extend(cache.keys().cloned());
+            cache
+                .iter()
+                .filter_map(|(host, reading)| Some((host.clone(), reading.hostname.clone()?)))
+                .collect()
+        })
+        .unwrap_or_default();
+    let config = dirs::home_dir()
+        .and_then(|home| std::fs::read_to_string(home.join(".ssh").join("config")).ok())
+        .unwrap_or_default();
+
+    hosts
+        .into_iter()
+        .map(|host| Environment {
+            id: format!("ssh:{host}"),
+            name: names
+                .get(&host)
+                .cloned()
+                .or_else(|| ssh_alias(&config, &host))
+                .unwrap_or(host),
+            kind: EnvKind::Ssh,
+        })
+        .collect()
+}
+
+fn ssh_alias(config: &str, target: &str) -> Option<String> {
+    let (user, hostname) = target.rsplit_once('@')?;
+    let mut alias = None;
+    let mut configured_user = None;
+    let mut configured_hostname = None;
+    // Only literal Host entries can be displayed as aliases.
+    for line in config.lines().chain(std::iter::once("Host")) {
+        let line = line.split('#').next()?.trim();
+        let key_end = line
+            .find(|c: char| c.is_whitespace() || c == '=')
+            .unwrap_or(line.len());
+        let (key, value) = line.split_at(key_end);
+        let value = value
+            .trim_start_matches(|c: char| c.is_whitespace() || c == '=')
+            .trim();
+        if key.eq_ignore_ascii_case("Host") || key.eq_ignore_ascii_case("Match") {
+            if configured_user == Some(user)
+                && configured_hostname.is_some_and(|name: &str| name.eq_ignore_ascii_case(hostname))
+            {
+                if let Some(alias) = alias {
+                    return Some(alias);
+                }
+            }
+            alias = key
+                .eq_ignore_ascii_case("Host")
+                .then(|| {
+                    value
+                        .split_whitespace()
+                        .map(|alias| alias.trim_matches('"'))
+                        .find(|alias| !alias.is_empty() && !alias.contains(['*', '?', '!']))
+                        .map(str::to_owned)
+                })
+                .flatten();
+            configured_user = None;
+            configured_hostname = None;
+        } else if key.eq_ignore_ascii_case("User") {
+            configured_user.get_or_insert(value.trim_matches('"'));
+        } else if key.eq_ignore_ascii_case("HostName") {
+            configured_hostname.get_or_insert(value.trim_matches('"'));
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const OUT: &str = "F\t1000\t1010\n\
+    const OUT: &str = "H\tbeelink\n\
+F\t100000\t100010\n\
 M\t\"id\":\"P1\"\n\
 M\t\"cwd\":\"/root/homelab\"\n\
 M\t\"originator\":\"Claude Code\"\n\
 T\t\"input_tokens\":237500\n\
 T\t\"model_context_window\":475000\n\
-F\t995\t1010\n\
+F\t99995\t100010\n\
 M\t\"id\":\"S1\"\n\
 M\t\"cwd\":\"/root/homelab\"\n\
 M\t\"parent_thread_id\":\"P1\"\n\
 M\t\"agent_nickname\":\"Pauli\"\n\
-F\t100\t1010\n\
+F\t92810\t100010\n\
+M\t\"id\":\"SLEEPING\"\n\
+F\t100\t100010\n\
 M\t\"id\":\"OLD\"\n";
 
     #[test]
     fn parses_remote_sessions_and_nests_subagents() {
-        let chats = parse(OUT);
-        assert_eq!(chats.len(), 1, "old session dropped, subagent nested");
+        let (hostname, chats) = parse(OUT, "user@synthetic");
+        assert_eq!(hostname.as_deref(), Some("beelink"));
+        assert_eq!(chats.len(), 2, "old session dropped, subagent nested");
         let c = &chats[0];
         assert_eq!(c.id, "P1");
         assert_eq!(c.title, "homelab");
         assert_eq!(c.cwd.as_deref(), Some("/root/homelab"));
         assert!(c.from_claude);
         assert!(c.working);
+        assert_eq!(c.env_id, "ssh:user@synthetic");
+        assert!(!c.asleep);
+        assert!(chats[1].asleep && !chats[1].working);
         assert_eq!(c.context_percent, Some(50.0));
         assert_eq!(c.subagents.len(), 1);
         assert_eq!(c.subagents[0].name, "Pauli");
@@ -312,7 +497,7 @@ M\t\"id\":\"OLD\"\n";
     #[test]
     fn orphan_remote_subagent_stays_a_chat() {
         let out = "F\t1000\t1005\nM\t\"id\":\"S1\"\nM\t\"parent_thread_id\":\"GONE\"\nM\t\"agent_nickname\":\"Erdos\"\n";
-        let chats = parse(out);
+        let (_, chats) = parse(out, "user@synthetic");
         assert_eq!(chats.len(), 1);
         assert_eq!(chats[0].title, "Erdos");
     }
@@ -323,14 +508,45 @@ M\t\"id\":\"OLD\"\n";
         let nested = dir.join("acct").join("org");
         std::fs::create_dir_all(&nested).unwrap();
         let write = |name: &str, body: &str| std::fs::write(nested.join(name), body).unwrap();
-        write("local_a.json", r#"{"lastActivityAt":1000000,"sshConfig":{"sshHost":"root@10.0.0.5","sshIdentityFile":"/k/id"}}"#);
-        write("local_b.json", r#"{"lastActivityAt":1000000,"sshConfig":{"sshHost":"root@10.0.0.5"}}"#);
-        write("local_old.json", r#"{"lastActivityAt":1,"sshConfig":{"sshHost":"root@10.0.0.9"}}"#);
+        write(
+            "local_a.json",
+            r#"{"cliSessionId":"synthetic-cli","lastActivityAt":1000000,"sshConfig":{"sshHost":"root@10.0.0.5","sshIdentityFile":"/k/id"}}"#,
+        );
+        write(
+            "local_b.json",
+            r#"{"lastActivityAt":1000000,"sshConfig":{"sshHost":"root@10.0.0.5"}}"#,
+        );
+        write(
+            "local_old.json",
+            r#"{"lastActivityAt":1,"sshConfig":{"sshHost":"root@10.0.0.9"}}"#,
+        );
         write("local_plain.json", r#"{"lastActivityAt":1000000}"#);
-        write("local_arch.json", r#"{"lastActivityAt":1000000,"isArchived":true,"sshConfig":{"sshHost":"root@10.0.0.7"}}"#);
-        let targets = active_targets(std::slice::from_ref(&dir), 1_000_000 + 5_000);
+        write(
+            "local_arch.json",
+            r#"{"lastActivityAt":1000000,"isArchived":true,"sshConfig":{"sshHost":"root@10.0.0.7"}}"#,
+        );
+        let index = scan_sessions(std::slice::from_ref(&dir));
+        assert_eq!(
+            index.hosts.get("synthetic-cli").map(String::as_str),
+            Some("root@10.0.0.5")
+        );
+        let targets = index.active_targets(87_000_000);
         std::fs::remove_dir_all(&dir).ok();
-        assert_eq!(targets.len(), 1, "deduped by host; old, plain and archived skipped");
+        assert_eq!(
+            targets.len(),
+            1,
+            "deduped by host; old, plain and archived skipped"
+        );
         assert_eq!(targets[0].host, "root@10.0.0.5");
+    }
+
+    #[test]
+    fn ssh_config_alias_matches_hostname_and_user() {
+        let config = "Host *\n  User nobody\nHost wrong\n  HostName example.test\n  User other\nHost beelink\n  HostName example.test\n  User dev # lab\n";
+        assert_eq!(
+            ssh_alias(config, "dev@example.test").as_deref(),
+            Some("beelink")
+        );
+        assert_eq!(ssh_alias(config, "missing@example.test"), None);
     }
 }

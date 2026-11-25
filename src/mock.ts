@@ -18,6 +18,7 @@ export function mockSnapshot(): Snapshot {
     base.codex = { ...base.codex, status: "unavailable", primary: null, secondary: null, tokens5h: null, plan: null,
       message: "Codex no está instalado en este equipo." };
     base.projects = [];
+    base.environments = base.environments.filter((env) => env.kind === "local");
   }
   return base;
 }
@@ -26,7 +27,8 @@ function normal(): Snapshot {
   const now = Date.now();
   const at = (min: number) => new Date(now + min * 60_000).toISOString();
   const widgetCwd = "C:\\Code\\claudecode-codex-widgetUsage";
-  const landingCwd = "C:\\Code\\landing-web";
+  const landingCwd = "/srv/landing-web";
+  const remoteEnv = "ssh:dev@beelink";
   return {
     takenAt: new Date(now).toISOString(),
     claude: {
@@ -49,39 +51,50 @@ function normal(): Snapshot {
       tokens5h: 2_310_000,
       observedAt: new Date(now - 4 * 60_000).toISOString(),
     },
+    environments: [
+      { id: "local", name: "Este PC", kind: "local" },
+      { id: remoteEnv, name: "beelink", kind: "ssh" },
+    ],
     projects: [
       {
         id: widgetCwd.toLowerCase(),
+        envId: "local",
         name: "claudecode-codex-widgetUsage",
         cwd: widgetCwd,
         lastActivity: at(0),
         working: true,
+        asleep: false,
         boss: {
           id: "c1", provider: "claude", title: "Contexto de la herramienta",
-          cwd: widgetCwd, lastActivity: at(0), working: true, fromClaude: false,
+          envId: "local", cwd: widgetCwd, lastActivity: at(0), working: true, asleep: false, fromClaude: false,
           contextPercent: 68, contextApprox: false, subagents: [], moreSubagents: 0,
         },
         crew: [
-          { id: "x1", kind: "codex", name: "Pauli", working: true, contextPercent: 42, lastActivity: at(-0.05) },
-          { id: "x2", kind: "codex", name: "Erdos", working: true, contextPercent: 37, lastActivity: at(-0.1) },
-          { id: "x3", kind: "codex", name: "Newton", working: true, contextPercent: 54, lastActivity: at(-0.15) },
-          { id: "a1", kind: "claude-sub", name: "Buscar tests", working: true, contextPercent: null, lastActivity: at(-0.2) },
-          { id: "x4", kind: "codex", name: "graphify", working: false, contextPercent: 23, lastActivity: at(-1) },
+          { id: "x1", kind: "codex", name: "Pauli", working: true, asleep: false, contextPercent: 42, lastActivity: at(-0.05) },
+          { id: "x2", kind: "codex", name: "Erdos", working: true, asleep: false, contextPercent: 37, lastActivity: at(-0.1) },
+          { id: "x3", kind: "codex", name: "Newton", working: true, asleep: false, contextPercent: 54, lastActivity: at(-0.15) },
+          { id: "a1", kind: "claude-sub", name: "Buscar tests", working: true, asleep: false, contextPercent: null, lastActivity: at(-0.2) },
+          { id: "x4", kind: "codex", name: "graphify", working: false, asleep: false, contextPercent: 23, lastActivity: at(-1) },
         ],
         moreCrew: 0,
       },
       {
-        id: landingCwd.toLowerCase(),
+        id: landingCwd,
+        envId: remoteEnv,
         name: "landing-web",
         cwd: landingCwd,
-        lastActivity: at(-2),
+        lastActivity: at(-120),
         working: false,
+        asleep: true,
         boss: {
           id: "c2", provider: "claude", title: "landing",
-          cwd: landingCwd, lastActivity: at(-2), working: false, fromClaude: false,
+          envId: remoteEnv, cwd: landingCwd, lastActivity: at(-120), working: false, asleep: true, fromClaude: false,
           contextPercent: 91, contextApprox: false, subagents: [], moreSubagents: 0,
         },
-        crew: [],
+        crew: [
+          { id: "x5", kind: "codex", name: "Pruebas", working: false, asleep: true, contextPercent: 43, lastActivity: at(-125) },
+          { id: "x6", kind: "codex", name: "Revisión", working: false, asleep: true, contextPercent: 31, lastActivity: at(-130) },
+        ],
         moreCrew: 0,
       },
     ],

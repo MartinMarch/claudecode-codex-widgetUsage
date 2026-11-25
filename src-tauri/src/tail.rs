@@ -4,7 +4,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::SystemTime;
 
-pub const ACTIVE_SECS: u64 = 600;
+pub const AWAKE_SECS: u64 = 600;
+pub const LIST_SECS: u64 = 86_400;
 pub const WORKING_SECS: u64 = 20;
 pub const TAIL_BYTES: u64 = 64 * 1024;
 
@@ -40,20 +41,17 @@ pub fn read_head(path: &Path, max_bytes: u64) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-pub fn modified_secs_ago(path: &Path, now: SystemTime) -> Option<u64> {
+pub fn activity(path: &Path, now: SystemTime) -> Option<(String, bool, bool)> {
     let modified = fs::metadata(path).ok()?.modified().ok()?;
-    Some(now.duration_since(modified).unwrap_or_default().as_secs())
-}
-
-pub fn activity(path: &Path, now: SystemTime) -> Option<(String, bool)> {
-    let age = modified_secs_ago(path, now)?;
-    if age > ACTIVE_SECS {
+    let age = now.duration_since(modified).unwrap_or_default().as_secs();
+    if age > LIST_SECS {
         return None;
     }
-    let modified = DateTime::<Utc>::from(fs::metadata(path).ok()?.modified().ok()?);
+    let modified = DateTime::<Utc>::from(modified);
     Some((
         modified.to_rfc3339_opts(SecondsFormat::Nanos, true),
         age <= WORKING_SECS,
+        age > AWAKE_SECS,
     ))
 }
 
@@ -63,6 +61,31 @@ pub fn folder_name(cwd: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn activity_distinguishes_working_awake_asleep_and_expired() {
+        use std::time::{Duration, SystemTime};
+
+        let dir = std::env::temp_dir().join(format!("ag-activity-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("chat.jsonl");
+        let file = std::fs::File::create(&path).unwrap();
+        let now = SystemTime::now();
+        for (age, expected) in [
+            (10, Some((true, false))),
+            (300, Some((false, false))),
+            (7200, Some((false, true))),
+            (90_000, None),
+        ] {
+            file.set_modified(now - Duration::from_secs(age)).unwrap();
+            assert_eq!(
+                super::activity(&path, now).map(|(_, working, asleep)| (working, asleep)),
+                expected
+            );
+        }
+        drop(file);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn read_tail_only_reads_the_end() {
         let path = std::env::temp_dir().join(format!("ag-tail-{}", std::process::id()));

@@ -1,13 +1,15 @@
 # Run on an SSH host by Agent Gauge (read-only). Prints, for each Codex
-# session touched in the last 10 minutes, only metadata:
+# session touched in the last 24 hours, only metadata:
+#   H <tab> hostname          (once, before any sessions)
 #   F <tab> modified-epoch <tab> now-epoch
 #   M <tab> "key":"value"      (id, cwd, originator, parent_thread_id, agent_nickname)
 #   T <tab> "key":number       (last turn's input_tokens, model_context_window)
 # Never prints conversation text.
+printf 'H\t%s\n' "$(hostname)"
 d="${CODEX_HOME:-$HOME/.codex}/sessions"
 [ -d "$d" ] || exit 0
 now=$(date +%s)
-find "$d" -name '*.jsonl' -mmin -10 2>/dev/null | while IFS= read -r f; do
+find "$d" -type f -name '*.jsonl' -mmin -1440 2>/dev/null | while IFS= read -r f; do
   m=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f")
   printf 'F\t%s\t%s\n' "$m" "$now"
   head -c 65536 "$f" | head -n 1 \

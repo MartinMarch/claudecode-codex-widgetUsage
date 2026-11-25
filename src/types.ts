@@ -26,15 +26,18 @@ export interface Subagent {
   kind: string | null;
   lastActivity: string;
   working: boolean;
+  asleep: boolean;
 }
 
 export interface Chat {
   id: string;
+  envId: string;
   provider: Provider;
   title: string;
   cwd: string | null;
   lastActivity: string;
   working: boolean;
+  asleep: boolean;
   fromClaude: boolean;
   contextPercent: number | null;
   contextApprox: boolean;
@@ -49,25 +52,37 @@ export interface CrewMember {
   kind: CrewKind;
   name: string;
   working: boolean;
+  asleep: boolean;
   contextPercent: number | null;
   lastActivity: string;
 }
 
 export interface Project {
   id: string;
+  envId: string;
   name: string;
   cwd: string | null;
   lastActivity: string;
   working: boolean;
+  asleep: boolean;
   boss: Chat | null;
   crew: CrewMember[];
   moreCrew: number;
+}
+
+export type EnvKind = "local" | "ssh";
+
+export interface Environment {
+  id: string;
+  name: string;
+  kind: EnvKind;
 }
 
 export interface Snapshot {
   claude: ProviderUsage;
   codex: ProviderUsage;
   projects: Project[];
+  environments: Environment[];
   takenAt: string;
 }
 
