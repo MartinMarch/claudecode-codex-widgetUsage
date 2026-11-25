@@ -3,7 +3,7 @@ import "@fontsource-variable/manrope";
 import "./styles.css";
 
 import { fetchPlatform, fetchSnapshot, fitWindow, hideWindow } from "./api";
-import { bossCritter, claudeCritter, codexCritter, whip } from "./critters";
+import { bossCritter, claudeCritter, codexCritter, fillCritter, whip } from "./critters";
 import { duration, folder, projection, since, tokens } from "./format";
 import { gauge } from "./gauge";
 import type { CrewMember, Project, Provider, ProviderUsage, Snapshot } from "./types";
@@ -17,6 +17,16 @@ const root = document.getElementById("app")!;
 let last: Snapshot | null = null;
 let compact = false;
 let firstPaint = true;
+
+// Which environment tab is open ("all" or an environment id), remembered per viewer.
+const ENV_KEY = "agent-gauge.env";
+let envFilter = (() => {
+  try {
+    return localStorage.getItem(ENV_KEY) ?? "all";
+  } catch {
+    return "all";
+  }
+})();
 
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -76,8 +86,9 @@ function account(u: ProviderUsage, working: boolean): string {
 
 function mate(m: CrewMember): string {
   const small = m.kind === "codex-sub" || m.kind === "claude-sub";
-  const art = m.kind.startsWith("codex") ? codexCritter({ small, awake: m.working }) : claudeCritter({ small, awake: m.working });
-  return `<span class="mate${m.working ? "" : " is-idle"}" title="${esc(m.name)}"><span class="sweat"></span>${art}</span>`;
+  const art = m.kind.startsWith("codex") ? codexCritter({ small, awake: !m.asleep }) : claudeCritter({ small, awake: !m.asleep });
+  const state = m.asleep ? " is-asleep" : m.working ? "" : " is-idle";
+  return `<span class="mate${state}" title="${esc(m.name)}"><span class="sweat"></span>${m.asleep ? `<span class="zzz">z</span>` : ""}${art}</span>`;
 }
 
 function whoRow(provider: Provider, name: string, label: string, working: boolean, right: string): string {
@@ -85,11 +96,12 @@ function whoRow(provider: Provider, name: string, label: string, working: boolea
     <span class="name">${esc(name)} <span class="reset">· ${label}</span></span><span>${right}</span></div>`;
 }
 
-function project(p: Project): string {
+function project(p: Project, envName?: string): string {
   const boss = p.boss;
   const crew = p.crew.map(mate).join("");
   const more = p.moreCrew > 0 ? `<span class="crew-more">+${p.moreCrew}</span>` : "";
-  const waiting = boss && !p.working && !p.crew.length ? `<span class="waiting">esperando tu respuesta</span>` : "";
+  const waiting =
+    boss && !p.working && !p.asleep && !p.crew.length ? `<span class="waiting">esperando tu respuesta</span>` : "";
   const list = [
     boss ? whoRow("claude", boss.title, "jefe", boss.working, boss.contextPercent == null ? "–" : `${Math.round(boss.contextPercent)} %`) : "",
     ...p.crew.map((m) =>
@@ -98,16 +110,16 @@ function project(p: Project): string {
         m.name,
         KIND_LABEL[m.kind],
         m.working,
-        m.contextPercent != null ? `${Math.round(m.contextPercent)} %` : m.working ? "trabajando" : "en espera",
+        m.contextPercent != null ? `${Math.round(m.contextPercent)} %` : m.working ? "trabajando" : m.asleep ? "dormido" : "en espera",
       ),
     ),
   ].join("");
   return `
-  <section class="proj${p.working ? " is-working" : ""}${boss ? "" : " no-boss"}" tabindex="0" title="${esc(p.cwd ?? "")}">
-    <div class="proj-head"><span class="proj-name">${esc(p.name || folder(p.cwd))}</span>
+  <section class="proj${p.working ? " is-working" : ""}${p.asleep ? " is-asleep" : ""}${boss ? "" : " no-boss"}" tabindex="0" title="${esc(p.cwd ?? "")}">
+    <div class="proj-head"><span class="proj-name">${esc(p.name || folder(p.cwd))}${envName ? `<span class="env-tag">${esc(envName)}</span>` : ""}</span>
       ${boss ? ctx(boss.contextPercent, boss.contextApprox, "claude") : ""}</div>
     <div class="stage">
-      ${boss ? `<div class="boss">${bossCritter(p.working)}${whip()}</div>` : ""}
+      ${boss ? `<div class="boss">${p.asleep ? `<span class="zzz">z</span>` : ""}${bossCritter(!p.asleep)}${whip()}</div>` : ""}
       <div class="crew">${crew}${more}${waiting}</div>
     </div>
     <div class="reveal"><div>${list}</div></div>
@@ -124,9 +136,30 @@ function workingTools(s: Snapshot): Record<Provider, boolean> {
   return out;
 }
 
+/** Tabs to filter projects by where they run. Hidden when there is only one place. */
+function tabs(s: Snapshot): string {
+  const envs = s.environments.filter((e) => s.projects.some((p) => p.envId === e.id));
+  if (envs.length < 2) return "";
+  if (envFilter !== "all" && !envs.some((e) => e.id === envFilter)) envFilter = "all";
+  const tab = (id: string, label: string, n: number) =>
+    `<button type="button" class="tab${envFilter === id ? " is-on" : ""}" data-env="${esc(id)}" aria-pressed="${envFilter === id}">${esc(label)}<small>${n}</small></button>`;
+  return `<div class="tabs" role="group" aria-label="Entorno">${tab("all", "Todos", s.projects.length)}${envs
+    .map((e) => tab(e.id, e.name, s.projects.filter((p) => p.envId === e.id).length))
+    .join("")}</div>`;
+}
+
+function projectsFor(s: Snapshot): string {
+  const list = envFilter === "all" ? s.projects : s.projects.filter((p) => p.envId === envFilter);
+  if (!list.length) return `<p class="empty">Nada en las últimas 24 horas.</p>`;
+  const multi = new Set(s.projects.map((p) => p.envId)).size > 1;
+  const envName = (p: Project) =>
+    envFilter === "all" && multi ? s.environments.find((e) => e.id === p.envId)?.name : undefined;
+  return list.map((p) => project(p, envName(p))).join("");
+}
+
 function render(s: Snapshot, prev: Snapshot | null) {
   const pill = (u: ProviderUsage) =>
-    `<span class="pill-item pill-${u.provider}"><i></i>${pct(u.primary?.usedPercent)}<small>%</small></span>`;
+    `<span class="pill-item pill-${u.provider}" title="${NAMES[u.provider]}: queda ${u.primary?.usedPercent == null ? "–" : 100 - Math.round(u.primary.usedPercent)} %">${fillCritter(u.provider, u.primary?.usedPercent ?? null)}<span>${pct(u.primary?.usedPercent)}<small>%</small></span></span>`;
   const busy = workingTools(s);
 
   root.innerHTML = `
@@ -144,8 +177,9 @@ function render(s: Snapshot, prev: Snapshot | null) {
   </header>
   <div class="accounts">${account(s.claude, busy.claude)}${account(s.codex, busy.codex)}</div>
   <section class="projects" aria-label="Proyectos activos">
-    <h2 class="projects-head">Proyectos activos</h2>
-    ${s.projects.length ? s.projects.map(project).join("") : `<p class="empty">Ningún chat activo ahora mismo.</p>`}
+    <h2 class="projects-head">Proyectos</h2>
+    ${tabs(s)}
+    ${projectsFor(s)}
   </section>`;
 
   // Live usage: when a percentage rose since the last reading, bump it and float "+N %".
@@ -172,6 +206,17 @@ function render(s: Snapshot, prev: Snapshot | null) {
 }
 
 root.addEventListener("click", async (e) => {
+  const tabBtn = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-env]");
+  if (tabBtn) {
+    envFilter = tabBtn.dataset.env ?? "all";
+    try {
+      localStorage.setItem(ENV_KEY, envFilter);
+    } catch {
+      /* private mode: the choice just lasts for this session */
+    }
+    if (last) render(last, null);
+    return;
+  }
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-act]");
   if (!btn) return;
   if (btn.dataset.act === "hide") return hideWindow();

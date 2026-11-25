@@ -339,3 +339,66 @@ body.compact .pill { display: flex; gap: 18px; flex: 1; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- Environments tabs ---------- */
+
+.tabs { display: flex; gap: 4px; margin: 2px 0 6px; overflow: hidden; }
+.tab {
+  flex: none;
+  max-width: 120px;
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 99px;
+  background: transparent;
+  color: var(--ink-dim);
+  font: 600 11px/1.3 var(--text);
+  text-shadow: var(--lift);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+.tab:hover { background: var(--hair); color: var(--ink); }
+.tab.is-on { background: rgba(238, 242, 255, 0.16); color: var(--ink); }
+.tab:focus-visible { outline: 2px solid var(--codex-a); outline-offset: 1px; }
+.tab small { margin-left: 4px; color: var(--ink-faint); font-weight: 500; }
+.env-tag { margin-left: 6px; font-size: 10.5px; font-weight: 500; color: var(--ink-faint); }
+
+/* ---------- Sleeping agents ---------- */
+
+.proj.is-asleep .boss, .proj.is-asleep .proj-name { opacity: 0.6; }
+.mate.is-asleep { opacity: 0.38; }
+.mate.is-asleep .critter-svg, .proj.is-asleep .boss .critter-svg { animation: breathe 4.8s ease-in-out infinite; }
+.zzz {
+  position: absolute;
+  top: -4px;
+  right: -2px;
+  font: 700 9px/1 var(--display);
+  color: var(--ink-dim);
+  pointer-events: none;
+  animation: zzz 3s ease-in-out infinite;
+}
+.boss .zzz { right: 2px; font-size: 10px; }
+@keyframes zzz { 0% { opacity: 0; transform: translate(0, 4px); } 30% { opacity: 1; } 100% { opacity: 0; transform: translate(4px, -6px); } }
+.more-projects { margin-top: 4px; font-size: 11.5px; color: var(--ink-faint); }
+
+@media (prefers-reduced-motion: reduce) {
+  .zzz { animation: none; opacity: 0.8; }
+}
+
+/* ---------- Compact: critters filled with what is left ---------- */
+
+.fill-critter { position: relative; display: inline-block; width: 44px; height: 44px; flex: none; }
+.fill-critter > span { position: absolute; inset: 0; }
+.fill-critter .critter-svg { width: 44px; height: 44px; display: block; }
+/* The drained part: a pale ghost of the critter. */
+.fc-empty .critter-svg { filter: grayscale(1) brightness(1.8); opacity: 0.32; }
+.fc-full { transition: clip-path 0.8s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.fill-claude .fc-full .critter-svg { filter: drop-shadow(0 0 5px rgba(255, 143, 112, 0.55)); }
+.fill-codex .fc-full .critter-svg { filter: drop-shadow(0 0 5px rgba(92, 200, 255, 0.55)); }
+.fill-critter.is-unknown .fc-full { display: none; }
+
+body.compact .pill { justify-content: space-between; align-items: center; }
+body.compact .pill-item { gap: 10px; }
+body.compact .pill-codex { flex-direction: row-reverse; }

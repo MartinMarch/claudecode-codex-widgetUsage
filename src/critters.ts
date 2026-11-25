@@ -54,3 +54,18 @@ export function codexCritter(opts: { small?: boolean; awake?: boolean } = {}): s
 export function whip(): string {
   return `<svg class="whip" viewBox="0 0 46 22" aria-hidden="true"><path d="M2 20 Q 12 2, 26 8 T 44 6"/><circle class="crack" cx="44" cy="6" r="3"/></svg>`;
 }
+
+/**
+ * Compact-mode gauge: the critter drained of colour, refilled from the
+ * bottom with what is left. At 70 % used, the lower 30 % is coloured.
+ * The body spans rows 3–14 of the 16-row grid, so the fill maps onto that.
+ */
+export function fillCritter(provider: "claude" | "codex", usedPercent: number | null): string {
+  const art = provider === "claude" ? claudeCritter() : codexCritter();
+  const left = usedPercent == null ? 0 : Math.max(0, Math.min(100, 100 - usedPercent));
+  const top = ((3 + 11 * (1 - left / 100)) / 16) * 100; // % of the box hidden from the top
+  return `<span class="fill-critter fill-${provider}${usedPercent == null ? " is-unknown" : ""}" aria-hidden="true">
+    <span class="fc-empty">${art}</span>
+    <span class="fc-full" style="clip-path: inset(${top.toFixed(1)}% 0 0 0)">${art}</span>
+  </span>`;
+}
