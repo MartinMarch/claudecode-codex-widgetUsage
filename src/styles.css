@@ -449,3 +449,6 @@ body.compact .pill-codex { flex-direction: row-reverse; }
 @media (prefers-reduced-motion: reduce) {
   .controls button.is-spinning svg { animation: none; opacity: 0.5; }
 }
+
+/* Says "used" next to the number: Codex's /status shows what is left instead. */
+.used-label { margin-left: 5px; font-size: 10.5px; font-weight: 600; color: var(--ink-faint); align-self: center; }

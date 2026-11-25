@@ -121,13 +121,14 @@ function account(u: ProviderUsage, working: boolean): string {
     <div class="meter">
       ${gauge(u.provider, u.primary.usedPercent, p?.atReset ?? null)}
       <div>
-        <div class="readout"><span class="num">${pct(u.primary.usedPercent)}</span><span class="unit">%</span></div>
+        <div class="readout"><span class="num">${pct(u.primary.usedPercent)}</span><span class="unit">%</span><span class="used-label">usado</span></div>
         <h2 class="who">${name}${u.plan ? `<span class="plan">${esc(u.plan)}</span>` : ""}</h2>
         <p class="reset">${reset != null ? `se renueva en ${duration(reset)}` : "sesión de 5 h"}</p>
       </div>
     </div>
     <div class="reveal"><div>
-      ${week != null ? `<p class="kv"><span>Semana</span><span>${pct(week)} %</span></p><div class="bar"><i style="width:${Math.min(100, week)}%"></i></div>` : ""}
+      ${u.primary.usedPercent != null ? `<p class="kv"><span>Te queda en esta sesión</span><span>${100 - Math.round(u.primary.usedPercent)} %</span></p>` : ""}
+      ${week != null ? `<p class="kv"><span>Semana (usado)</span><span>${pct(week)} %</span></p><div class="bar"><i style="width:${Math.min(100, week)}%"></i></div>` : ""}
       ${pace}
       ${u.tokens5h ? `<p class="kv"><span>Tokens en 5 h</span><span>${tokens(u.tokens5h)}</span></p>` : ""}
     </div></div>
