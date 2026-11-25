@@ -1,4 +1,4 @@
-# Builds Agent Gauge from source and runs the Windows installer it produces.
+﻿# Builds Agent Gauge from source and runs the Windows installer it produces.
 # Usage (PowerShell, from the repo folder):  ./scripts/install.ps1
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
