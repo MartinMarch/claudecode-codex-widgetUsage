@@ -130,6 +130,37 @@ Chat {
 
 `Snapshot.processes` pasa a ser `Snapshot.chats`. El mock del navegador se actualiza con chats de ejemplo, incluido un subagente y un chat al 91 %.
 
+### 5. Bichitos y vista por proyectos (añadido tras ver las maquetas)
+
+El usuario vio el cristal nuevo y le pareció frío. Quiere algo más amable: los bichitos de Claude y de Codex animados, hover que despliegan detalles, y ver "cómo se mueve el uso" mientras algo trabaja. También quiere los chats agrupados **por proyecto**, porque suele tener un Claude mandando y varios Codex trabajando para él. Las maquetas aprobadas son `.superpowers/brainstorm/*/content/bichitos.html` (cuentas) y `proyectos.html` (proyectos).
+
+**Cuentas (parte de arriba).** Una fila por cuenta: el bichito, un arco pequeño (unos 64 px), el % grande, el nombre y "se renueva en…". El bichito de Claude va a la izquierda y el de Codex a la derecha.
+- En reposo, los bichitos respiran y parpadean.
+- Si su herramienta tiene algún chat trabajando, el bichito "camina".
+- Hover sobre la fila: despliega la semana, el ritmo previsto y los tokens de 5 h.
+
+**Uso en vivo.** Cuando el % de una cuenta sube entre dos lecturas, el número y el arco suben con animación y sale un "+N %" flotando desde el bichito. Se muestra el % gastado (coincide con `/usage`), no lo que queda.
+
+**Proyectos (parte de abajo).** Sustituye a la lista de chats. Un proyecto es el conjunto de chats activos con la misma carpeta de trabajo. La comparación de rutas no distingue mayúsculas en Windows e ignora la barra final. Cada proyecto tiene:
+- **Jefe:** el chat de Claude más reciente de esa carpeta. Su saturación sale junto al nombre del proyecto. Mientras trabaja, el bichito de Claude da latigazos de dibujos animados cada 1,6 s.
+- **Cuadrilla:** todo lo demás de esa carpeta.
+  - Los chats de Codex y sus subagentes son bichitos azules.
+  - Los subagentes del jefe son bichitos naranjas pequeños.
+  - Otros chats de Claude en la misma carpeta son bichitos naranjas normales.
+  - Los que trabajan dan un respingo y sudan con cada latigazo. Los parados se ven apagados.
+- Si no hay chat de Claude en la carpeta, no hay jefe: solo la cuadrilla.
+- Si nada trabaja, el jefe se ve apagado con el látigo bajado y el texto "esperando tu respuesta".
+- **Hover sobre el proyecto:** despliega la lista con nombre, tipo, estado y saturación de cada uno.
+
+**Límites (decisión de Claude):**
+- Como mucho 4 proyectos, ordenados por actividad.
+- Como mucho 8 en la cuadrilla, primero los que trabajan y después los más recientes, con "+N" si hay más.
+- Se agrupa **antes** de recortar, para no perder la cuadrilla de un proyecto.
+
+**Bichitos (decisión de Claude):** son dibujos propios en pixel art con los colores de cada herramienta, no la ilustración oficial de Anthropic ni de OpenAI, porque el repo publica instaladores. Con `prefers-reduced-motion` no se anima nada.
+
+**Restricción del cristal:** los bichitos van **dentro** del panel. En Windows el desenfoque rellena toda la ventana, así que cualquier cosa que sobresaliera del panel dejaría ver un rectángulo borroso a su alrededor.
+
 ## Decisiones que deja al builder
 
 - Los umbrales exactos (10 min / 20 s / 80 %) se pueden ajustar si en la práctica se ven mal.

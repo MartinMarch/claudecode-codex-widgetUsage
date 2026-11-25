@@ -172,3 +172,55 @@ Flow in `fetch_remote` (non-macOS only, `#[cfg(not(target_os = "macos"))]`): rea
 - [ ] **Step 4:** `lib.rs::apply_glass` on Windows also calls `DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &DWMWCP_ROUND, 4)` (hwnd from `window.hwnd()`).
 - [ ] **Step 5:** Verify: `npm run build`, clippy, tests; then in `npm run app:dev` capture the window (scratchpad `shot.ps1`) over a light and a dark background: no square corner, background visible through, text readable, a live chat of this session listed with its context %.
 - [ ] **Step 6:** Commit `feat: lighter glass, clean corners and active chats list`.
+
+---
+
+## Addendum: projects, critters and live usage (spec §5)
+
+Task 6 above is superseded by Task 8. Tasks 1–5 are done (commit 721654b).
+
+### Task 7: Group chats into projects (Codex)
+
+**Files:**
+- Modify: `src-tauri/src/model.rs`, `src/types.ts`, `src/mock.ts`
+- Modify: `src-tauri/src/chats.rs` (replace `select` with `group`; keep readers untouched)
+- Modify: `src-tauri/src/lib.rs` (`Snapshot.projects`)
+- Modify: `src/main.ts` only as much as needed to compile (render `s.projects.length`; Task 8 redoes the section)
+
+**Interfaces:**
+- Consumes: `chats_claude::read`, `chats_codex::read` (unchanged; they return every active `Chat` with all subagents, untrimmed).
+- Produces (Rust, camelCase serde):
+  ```rust
+  #[serde(rename_all = "kebab-case")]
+  pub enum CrewKind { Codex, CodexSub, ClaudeChat, ClaudeSub }
+  pub struct CrewMember { pub id: String, pub kind: CrewKind, pub name: String,
+                          pub working: bool, pub context_percent: Option<f64>,
+                          pub last_activity: String }
+  pub struct Project { pub id: String /* normalized cwd or "sin-carpeta" */,
+                       pub name: String /* last folder of cwd */,
+                       pub cwd: Option<String>, pub last_activity: String,
+                       pub working: bool /* boss or any crew working */,
+                       pub boss: Option<Chat> /* subagents emptied: they move to crew */,
+                       pub crew: Vec<CrewMember>, pub more_crew: u32 }
+  pub struct Snapshot { pub claude, pub codex, pub projects: Vec<Project>, pub taken_at }
+  ```
+  `Chat` and `Subagent` stay as they are (the boss is a `Chat`). TS mirrors with `CrewKind = "codex" | "codex-sub" | "claude-chat" | "claude-sub"`.
+- `chats::normalize_cwd(cwd: &str) -> String` — trim trailing `\` and `/`; lowercase on Windows (`cfg!(windows)`).
+- `chats::group(all: Vec<Chat>) -> Vec<Project>`; `chats::read_all(now) -> Vec<Project>`.
+- Constants: `MAX_PROJECTS = 4`, `MAX_CREW = 8`.
+
+Rules: group by `normalize_cwd(cwd)` (chats without cwd go to one `"sin-carpeta"` project named "Sin carpeta"). Boss = most recent Claude chat in the group. Crew = other Claude chats (`ClaudeChat`, name = title), boss subagents (`ClaudeSub`, name = subagent name), Codex chats (`Codex`, name = title) and Codex subagents (`CodexSub`, name = nickname; `context_percent: None`). Crew sorted working-first then `last_activity` desc, truncated to `MAX_CREW` with `more_crew`. Projects sorted by `last_activity` desc (max of members), truncated to `MAX_PROJECTS`.
+
+- [ ] **Step 1: Failing tests** in `chats.rs`: `groups_by_folder_ignoring_case_and_trailing_slash` (Claude chat cwd `C:\Code\App\` + Codex chat cwd `c:\code\app` → 1 project, boss is the Claude chat, crew has 1 `Codex`; on non-Windows use the same case to keep the test portable: build the second path with `if cfg!(windows) { "c:\code\app" } else { "C:\Code\App" }`); `boss_subagents_become_crew` (boss with 2 subagents → `boss.subagents` empty, crew has 2 `ClaudeSub`); `codex_only_project_has_no_boss`; `crew_is_working_first_and_capped` (10 members, 2 working and oldest → those 2 first, len 8, `more_crew == 2`); `keeps_four_most_recent_projects`.
+- [ ] **Step 2:** `cargo test chats::` → FAIL.
+- [ ] **Step 3:** Implement; update model/types/mock (mock: project "claudecode-codex-widgetUsage" with working boss at 68 %, crew 3 working Codex "Pauli/Erdos/Newton", 1 idle Codex "graphify", 1 working ClaudeSub "Buscar tests"; second project "landing-web" with idle boss at 91 % and no crew; `?demo=empty` → `projects: []`).
+- [ ] **Step 4:** `cargo test`, `cargo clippy --all-targets -- -D warnings`, `npm run build` → all pass.
+- [ ] **Step 5:** Commit `feat: group active chats into projects with boss and crew`.
+
+### Task 8: Critters, account rows, projects and live usage (Claude — visual)
+
+**Files:** `src/main.ts`, `src/styles.css`, `src/gauge.ts`, new `src/critters.ts`, `src-tauri/src/lib.rs` + `Cargo.toml` (Windows `DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND`).
+
+- [ ] Port `bichitos.html` (account rows with critter, small arc, hover details, "+N %" puff when `usedPercent` rises between snapshots) and `proyectos.html` (project cards, whip animation, crew, hover list) into the real UI using the existing tokens. Critter SVGs live in `critters.ts` (`claudeCritter(size)`, `codexCritter(size)`, `whip()`).
+- [ ] Compact pill keeps working; `prefers-reduced-motion` stops all animation.
+- [ ] Verify in `npm run app:dev` with screenshots over light and dark wallpaper; commit `feat: critters, projects view and live usage`.
