@@ -27,6 +27,7 @@ Se inicializó en un contenedor Linux sin pantalla. Allí:
 
 ## Reglas del proyecto
 
+- El login de Codex (`~/.codex/auth.json`) solo se lee y solo se envía a chatgpt.com para pedir los límites (`src-tauri/src/codex_live.rs`). Nunca se renueva ni se reescribe.
 - En Windows y Linux, el widget puede renovar el token OAuth de Claude. Guarda los campos renovados de forma atómica y conserva los demás campos del archivo. En macOS, el acceso al Llavero es de solo lectura.
 - Envía las credenciales únicamente a los endpoints de uso y renovación de Anthropic. Los registros de los chats se procesan localmente.
 - Si cambias `src-tauri/src/model.rs`, actualiza también `src/types.ts`.

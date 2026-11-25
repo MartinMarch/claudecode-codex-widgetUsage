@@ -63,7 +63,7 @@ Los registros se procesan en local. El widget usa tu sesión de Claude Code para
 
 | Dato | Fuente |
 |---|---|
-| Límites de Codex | `~/.codex/sessions/**/rollout-*.jsonl`: el último evento `token_count` trae `rate_limits` |
+| Límites de Codex | Los mismos que `/status`: se piden a OpenAI (`chatgpt.com/backend-api/wham/usage`) con el login que Codex ya guarda en `~/.codex/auth.json`, como mucho una vez por minuto. Si falla, se usa el último `rate_limits` de `~/.codex/sessions/**/rollout-*.jsonl` |
 | Límites de Claude Code | El mismo endpoint que usa `/usage` en Claude Code, con el login que ya tienes (Llavero en macOS, `~/.claude/.credentials.json` en Linux y Windows). Las consultas se guardan en caché durante un minuto. |
 | Tokens de Claude Code | `~/.claude/projects/**/*.jsonl` |
 | Chats activos | Metadatos de los registros de Claude Code y Codex con actividad en los últimos 10 minutos |

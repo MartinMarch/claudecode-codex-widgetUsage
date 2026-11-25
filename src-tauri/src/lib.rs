@@ -3,6 +3,7 @@ mod chats_claude;
 mod chats_codex;
 mod claude;
 mod codex;
+mod codex_live;
 mod model;
 mod tail;
 
@@ -19,16 +20,21 @@ use tokio::sync::Mutex;
 
 struct Sources {
     claude: Mutex<claude::ClaudeSource>,
+    codex: Mutex<codex_live::CodexLive>,
 }
 
 #[tauri::command]
 async fn snapshot(sources: State<'_, Sources>) -> Result<Snapshot, String> {
     let claude = sources.claude.lock().await.read().await;
-    let (codex, projects) = tauri::async_runtime::spawn_blocking(|| {
+    let (codex_local, projects) = tauri::async_runtime::spawn_blocking(|| {
         (codex::read(), chats::read_all(SystemTime::now()))
     })
     .await
     .map_err(|e| e.to_string())?;
+    let codex = match sources.codex.lock().await.read(codex::home().as_deref()).await {
+        Some(live) => codex_live::overlay(codex_local, &live),
+        None => codex_local,
+    };
     Ok(Snapshot {
         claude,
         codex,
@@ -214,6 +220,7 @@ pub fn run() {
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .manage(Sources {
             claude: Mutex::new(claude::ClaudeSource::new()),
+            codex: Mutex::new(codex_live::CodexLive::new()),
         })
         .setup(|app| {
             #[cfg(target_os = "macos")]

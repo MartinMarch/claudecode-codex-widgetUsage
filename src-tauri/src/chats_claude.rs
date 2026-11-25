@@ -77,7 +77,9 @@ fn read_chat(path: &Path, project: &str, now: SystemTime) -> Option<Chat> {
         }
     }
 
-    let cwd = start_cwd.or(cwd);
+    // A chat that started at a filesystem root ("/" on an SSH host) names
+    // itself after the folder it moved into instead.
+    let cwd = start_cwd.filter(|c| folder_name(c).is_some()).or(cwd);
     Some(Chat {
         title: title.unwrap_or_else(|| {
             cwd.as_deref()
