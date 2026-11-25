@@ -1,48 +1,58 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
-  <!-- Agent Gauge icon: the Claude critter and the Codex critter on smoked glass.
-       Same 16×16 pixel drawings as src/critters.ts, scaled ×26. -->
+  <!-- Agent Gauge icon: Claude in front, Codex sneaking into the shot behind it. Die-cut sticker on transparent. -->
   <defs>
-    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#2a3560"/>
-      <stop offset="0.55" stop-color="#161c30"/>
-      <stop offset="1" stop-color="#3a2340"/>
-    </linearGradient>
-    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.35"/>
-      <stop offset="0.25" stop-color="#ffffff" stop-opacity="0.06"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0.02"/>
-    </linearGradient>
-    <radialGradient id="haloC"><stop offset="0" stop-color="#ff8f70" stop-opacity="0.45"/><stop offset="1" stop-color="#ff8f70" stop-opacity="0"/></radialGradient>
-    <radialGradient id="haloX"><stop offset="0" stop-color="#5cc8ff" stop-opacity="0.45"/><stop offset="1" stop-color="#5cc8ff" stop-opacity="0"/></radialGradient>
-  </defs>
-
-  <rect x="32" y="32" width="960" height="960" rx="216" fill="url(#glass)"/>
-  <rect x="32" y="32" width="960" height="960" rx="216" fill="url(#rim)"/>
-  <rect x="33.5" y="33.5" width="957" height="957" rx="214.5" fill="none" stroke="#ffffff" stroke-opacity="0.18" stroke-width="3"/>
-
-  <circle cx="278" cy="530" r="228" fill="url(#haloC)"/>
-  <circle cx="746" cy="530" r="228" fill="url(#haloX)"/>
-
-  <!-- Claude critter (left) -->
-  <g shape-rendering="crispEdges" transform="translate(70 318) scale(26)">
-    <g fill="#ff8f70">
-      <rect x="3" y="4" width="10" height="7"/><rect x="1" y="6" width="2" height="2"/><rect x="13" y="6" width="2" height="2"/>
-      <rect x="4" y="11" width="1" height="3"/><rect x="6" y="11" width="1" height="3"/>
-      <rect x="9" y="11" width="1" height="3"/><rect x="11" y="11" width="1" height="3"/>
+    <radialGradient id="bg" cx="0.3" cy="0.2" r="1">
+      <stop offset="0" stop-color="#2c3766"/><stop offset="0.6" stop-color="#141a30"/><stop offset="1" stop-color="#0c0f1e"/>
+    </radialGradient>
+    <linearGradient id="claude" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffa587"/><stop offset="1" stop-color="#e86a4a"/></linearGradient>
+    <linearGradient id="claudeLeg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e86a4a"/><stop offset="1" stop-color="#c9553a"/></linearGradient>
+    <linearGradient id="codex" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7fd8ff"/><stop offset="1" stop-color="#2f8fd0"/></linearGradient>
+    <radialGradient id="shadow"><stop offset="0" stop-color="#000" stop-opacity="0.5"/><stop offset="1" stop-color="#000" stop-opacity="0"/></radialGradient>
+    <radialGradient id="warm"><stop offset="0" stop-color="#ff8f70" stop-opacity="0.32"/><stop offset="1" stop-color="#ff8f70" stop-opacity="0"/></radialGradient>
+    <radialGradient id="cool"><stop offset="0" stop-color="#5cc8ff" stop-opacity="0.3"/><stop offset="1" stop-color="#5cc8ff" stop-opacity="0"/></radialGradient>
+    
+    <clipPath id="body"><rect x="200" y="430" width="460" height="290" rx="80"/></clipPath>
+  
+    <filter id="sticker" x="-15%" y="-15%" width="130%" height="130%">
+      <feMorphology in="SourceAlpha" operator="dilate" radius="22" result="grown"/>
+      <feGaussianBlur in="grown" stdDeviation="1.2" result="smooth"/>
+      <feFlood flood-color="#ffffff"/>
+      <feComposite in2="smooth" operator="in" result="outline"/>
+      <feDropShadow in="outline" dx="0" dy="16" stdDeviation="18" flood-color="#0b1020" flood-opacity="0.35" result="lifted"/>
+      <feMerge><feMergeNode in="lifted"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter></defs>
+  
+  <g transform="translate(512 512) scale(1.18) translate(-489 -540)">
+    <g filter="url(#sticker)">
+    <!-- Codex, behind, leaning in from the right -->
+    <g transform="rotate(8 690 420)">
+      <rect x="540" y="250" width="290" height="250" rx="96" fill="url(#codex)"/>
+      <rect x="806" y="335" width="44" height="84" rx="22" fill="#2f8fd0"/>
+      <path d="M612 334 l44 32 l-44 32" fill="none" stroke="#0c1d2c" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="682" y="384" width="80" height="22" rx="11" fill="#0c1d2c"/>
+      <ellipse cx="660" cy="282" rx="70" ry="14" fill="#ffffff" opacity="0.22"/>
     </g>
-    <g fill="#20140f"><rect x="5" y="6" width="1" height="2"/><rect x="10" y="6" width="1" height="2"/></g>
-  </g>
 
-  <!-- Codex critter (right) -->
-  <g shape-rendering="crispEdges" transform="translate(538 318) scale(26)">
-    <g fill="#5cc8ff">
-      <rect x="4" y="3" width="8" height="1"/><rect x="3" y="4" width="10" height="7"/>
-      <rect x="2" y="6" width="1" height="4"/><rect x="13" y="6" width="1" height="4"/>
-      <rect x="5" y="11" width="2" height="2"/><rect x="9" y="11" width="2" height="2"/>
-    </g>
-    <g fill="#0d1a24">
-      <rect x="5" y="6" width="1" height="1"/><rect x="6" y="7" width="1" height="1"/><rect x="5" y="8" width="1" height="1"/>
-      <rect x="8" y="8" width="3" height="1"/>
+    
+
+    <!-- Claude, front and centre -->
+    <rect x="240" y="690" width="46" height="138" rx="23" fill="url(#claudeLeg)"/>
+    <rect x="326" y="690" width="46" height="138" rx="23" fill="url(#claudeLeg)"/>
+    <rect x="490" y="690" width="46" height="138" rx="23" fill="url(#claudeLeg)"/>
+    <rect x="576" y="690" width="46" height="138" rx="23" fill="url(#claudeLeg)"/>
+    <rect x="128" y="510" width="110" height="86" rx="38" fill="url(#claude)"/>
+    <rect x="622" y="510" width="110" height="86" rx="38" fill="url(#claude)"/>
+    <rect x="200" y="430" width="460" height="290" rx="80" fill="url(#claude)"/>
+    <g clip-path="url(#body)"><ellipse cx="430" cy="430" rx="250" ry="46" fill="#ffffff" opacity="0.22"/></g>
+    <rect x="304" y="530" width="44" height="94" rx="22" fill="#24130d"/>
+    <rect x="512" y="530" width="44" height="94" rx="22" fill="#24130d"/>
+    <circle cx="318" cy="551" r="9" fill="#fff" opacity="0.85"/>
+    <circle cx="526" cy="551" r="9" fill="#fff" opacity="0.85"/>
+
+    <!-- Codex's hand gripping Claude's shoulder -->
+    <rect x="560" y="404" width="86" height="64" rx="30" fill="url(#codex)"/>
+    <rect x="574" y="408" width="56" height="12" rx="6" fill="#ffffff" opacity="0.25"/>
+
     </g>
   </g>
 </svg>
