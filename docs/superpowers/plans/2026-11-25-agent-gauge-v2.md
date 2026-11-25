@@ -224,3 +224,33 @@ Rules: group by `normalize_cwd(cwd)` (chats without cwd go to one `"sin-carpeta"
 - [ ] Port `bichitos.html` (account rows with critter, small arc, hover details, "+N %" puff when `usedPercent` rises between snapshots) and `proyectos.html` (project cards, whip animation, crew, hover list) into the real UI using the existing tokens. Critter SVGs live in `critters.ts` (`claudeCritter(size)`, `codexCritter(size)`, `whip()`).
 - [ ] Compact pill keeps working; `prefers-reduced-motion` stops all animation.
 - [ ] Verify in `npm run app:dev` with screenshots over light and dark wallpaper; commit `feat: critters, projects view and live usage`.
+
+### Task 9: Environments, 24 h window and sleeping agents (Codex)
+
+Spec §6. Backend only; Task 10 (Claude) does the UI.
+
+**Model (`model.rs` + `src/types.ts`, camelCase):**
+- `pub enum EnvKind { Local, Ssh }` (serde lowercase); `pub struct Environment { pub id: String, pub name: String, pub kind: EnvKind }`. Local env: `id = "local"`, `name = "Este PC"`. SSH env: `id = format!("ssh:{host}")`.
+- `Chat` gains `pub env_id: String` and `pub asleep: bool`. `Subagent` gains `pub asleep: bool`. `CrewMember` gains `pub asleep: bool`. `Project` gains `pub env_id: String` and `pub asleep: bool` (true when no boss/crew member is awake).
+- `Snapshot` gains `pub environments: Vec<Environment>` (Local first, then SSH envs that have at least one project).
+
+**Windows (`tail.rs`):** keep `WORKING_SECS = 20`; rename `ACTIVE_SECS` to `AWAKE_SECS = 600`; add `LIST_SECS = 86_400`. `activity()` returns `(last_activity, working, asleep)` and lists anything modified ≤ `LIST_SECS`; `asleep = age > AWAKE_SECS`.
+
+**Claude (`chats_claude.rs`):** list chats ≤ 24 h. Subagents: include finished ones too (≤ 24 h); `asleep = finished == true || age > AWAKE_SECS`; `working` only if not finished and ≤ 20 s. `env_id`: `"local"`, except chats under a project folder named `ssh-<cliSessionId>` → `chats_remote::host_for_cli_session(&cli_id)` gives the host → `ssh:{host}`.
+
+**Codex local (`chats_codex.rs`):** same 24 h window and `asleep`; `env_id = "local"`; scan the 2 newest day folders as before (enough for 24 h).
+
+**Remote (`chats_remote.rs`, `remote_codex.sh`):**
+- Script: `-mmin -1440` instead of `-10`; print `H\t$(hostname)` once at the top (before any `F`).
+- `parse` returns `(Option<String> /* hostname */, Vec<Chat>)`; chats get `env_id = ssh:{host}` and `asleep`.
+- Targets: SSH desktop chats with `lastActivityAt` within 24 h (not 10 min).
+- `pub fn host_for_cli_session(cli_session_id: &str) -> Option<String>` from the session files (`cliSessionId` → `sshConfig.sshHost`), cached for the process lifetime with a 60 s refresh.
+- `pub fn environments() -> Vec<Environment>`: names from the cached hostname; fallback: the `Host` alias in `~/.ssh/config` whose `HostName`+`User` match `user@hostname`; fallback: the host string.
+
+**Grouping (`chats.rs`):** key = `(env_id, normalize_cwd(cwd))`; `adopt_nested` only within the same env. Boss = most recent Claude chat (asleep or not). Crew order: working, then awake, then asleep, then recency. `MAX_PROJECTS` becomes per env: 5. `read_all` returns `(Vec<Environment>, Vec<Project>)`; `lib.rs` fills `Snapshot.environments`.
+
+**Mock (`src/mock.ts`):** environments `Este PC` and `beelink`; one sleeping project on beelink with a sleeping boss and 2 sleeping Codex.
+
+**Tests (failing first):** `activity` classifies 10 s / 5 min / 2 h / 25 h as working / awake / asleep / none; finished Claude subagent within 24 h is listed asleep; remote `parse` reads `H` and sets `env_id`; grouping keeps same folder on two envs as two projects; `adopt_nested` does not cross envs; per-env cap of 5; ssh config alias fallback naming.
+
+Done when `cargo test`, `cargo clippy --all-targets -- -D warnings` and `npm run build` pass. Do not touch `src/styles.css`, `src/main.ts` beyond compiling, `src/critters.ts`.

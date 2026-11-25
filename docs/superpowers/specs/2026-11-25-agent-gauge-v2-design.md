@@ -174,3 +174,27 @@ El usuario vio el cristal nuevo y le pareció frío. Quiere algo más amable: lo
 - Revisión visual en Windows: sin pico en las esquinas, el fondo se ve a través, los textos se leen sobre un fondo claro y sobre uno oscuro.
 - Con un chat de la app de escritorio trabajando y un Codex lanzado desde Claude, ambos aparecen con su saturación, y los subagentes desaparecen al terminar.
 - `npm run build`, `cargo clippy --all-targets -- -D warnings` y `cargo test` pasan.
+
+### 6. Entornos y agentes dormidos (añadido el 2026-11-25)
+
+El usuario trabaja en varios sitios: este PC con Windows y su servidor Beelink, al que la app de Claude entra por SSH (`root@192.168.68.50`). Quiere filtrar los proyectos según dónde corren y ver también los agentes que ya existen aunque estén parados, "como dormidos".
+
+**Entornos.**
+- **Este PC:** chats locales de Claude y de Codex.
+- **Un entorno por host SSH:** sale del `sshConfig` de los chats de la app de escritorio. Su nombre es el `hostname` que devuelve el propio servidor. Si no se puede obtener, se usa el alias de `~/.ssh/config` que apunta a ese host, y si tampoco hay, el host tal cual.
+- Los chats de Claude por SSH (`~/.claude/projects/ssh-<cliSessionId>/`) pertenecen al entorno de su host. El host se busca por `cliSessionId` en los archivos de sesión de la app.
+- **Nube:** queda fuera por ahora. En este PC no hay datos de agentes en la nube: el catálogo de la app de Codex solo tiene chats de ChatGPT, sin repositorio.
+
+**Estados de un chat o subagente.**
+- **Trabajando:** su registro se modificó hace ≤ 20 s.
+- **Despierto:** hace ≤ 10 min.
+- **Dormido:** hace ≤ 24 h.
+- Lo de hace más de 24 h no se muestra.
+- Los subagentes terminados (`finished: true`) también aparecen, dormidos, si son de las últimas 24 h.
+
+**Agrupación.** Los proyectos se agrupan por (entorno, carpeta). La regla de unir carpetas padre e hija solo se aplica dentro del mismo entorno.
+
+**Interfaz.**
+- Pestañas sobre los proyectos: "Todos", "Este PC" y una por host SSH. La pestaña elegida se recuerda en `localStorage`.
+- Los dormidos se dibujan con los ojos cerrados, más apagados y con una "z" pequeña. Un proyecto sin nadie despierto muestra al jefe dormido.
+- Como mucho 5 proyectos por entorno, y una línea "+N proyectos más" si hay más.
