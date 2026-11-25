@@ -19,14 +19,14 @@ function arc(from: number, to: number, r = R): string {
 
 const FULL = arc(0, 100);
 
-/** Tick marks every 10 %, longer at 50 and 100. */
-const TICKS = Array.from({ length: 11 }, (_, i) => {
-  const p = i * 10;
-  const long = p % 50 === 0;
-  const [x1, y1] = point(p, R + 9);
-  const [x2, y2] = point(p, R + (long ? 14 : 12));
-  return `<line x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}" class="tick${long ? " tick-long" : ""}"/>`;
-}).join("");
+/** Three quiet marks: empty, half, full. */
+const TICKS = [0, 50, 100]
+  .map((p) => {
+    const [x1, y1] = point(p, R + 7);
+    const [x2, y2] = point(p, R + 11);
+    return `<line x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}" class="tick"/>`;
+  })
+  .join("");
 
 export function gauge(provider: Provider, used: number | null, projected: number | null): string {
   const v = used == null ? 0 : Math.min(100, Math.max(0, used));
