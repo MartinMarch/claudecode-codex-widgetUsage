@@ -11,11 +11,13 @@
 //! On Windows and Linux, expiring credentials can be refreshed in place.
 //! The macOS Keychain stays read-only.
 
+use crate::activity::{self, LogLevel};
 use crate::model::{LimitWindow, Provider, ProviderUsage, Status};
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 #[cfg(not(target_os = "macos"))]
-use serde_json::{json, Value};
+use serde_json::json;
+use serde_json::Value;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -123,8 +125,9 @@ struct CredentialsFile {
 #[cfg(target_os = "macos")]
 fn read_credentials() -> Result<OauthBlob, String> {
     let raw = read_credentials_raw()?;
-    let parsed: CredentialsFile = serde_json::from_str(&raw)
-        .map_err(|e| format!("No se pudieron leer las credenciales: {e}"))?;
+    let parsed: CredentialsFile = serde_json::from_str(&raw).map_err(|_| {
+        "No se pudieron leer las credenciales. Abre Claude Code y vuelve a iniciar sesión."
+    })?;
     parsed.claude_ai_oauth.ok_or_else(|| {
         "Inicia sesión con tu cuenta de Claude en `claude` para ver los límites.".into()
     })
@@ -271,10 +274,35 @@ impl ClaudeSource {
             self.next_attempt = Some(Instant::now() + std::time::Duration::from_secs(wait));
             match result {
                 Ok(limits) => {
+                    activity::record_usage(
+                        "Claude",
+                        limits.0.as_ref().and_then(|w| w.used_percent),
+                        limits.1.as_ref().and_then(|w| w.used_percent),
+                    );
                     save_cached(&limits);
                     self.last_remote = Some(Ok(limits));
                 }
                 Err(msg) => {
+                    if msg.starts_with(RATE_LIMITED) {
+                        activity::record(
+                            "Claude",
+                            LogLevel::Warn,
+                            format!(
+                                "Anthropic limita las consultas (429). Próximo intento en {} min",
+                                wait.div_ceil(60)
+                            ),
+                        );
+                    } else {
+                        #[cfg(not(target_os = "macos"))]
+                        if msg == REFRESH_FAILED {
+                            activity::record(
+                                "Claude",
+                                LogLevel::Error,
+                                "No se pudo renovar el login",
+                            );
+                        }
+                        activity::record("Claude", LogLevel::Error, &msg);
+                    }
                     // Keep the previous good numbers (rate limit, offline...).
                     let keep_previous = matches!(self.last_remote, Some(Ok(_)));
                     #[cfg(not(target_os = "macos"))]
@@ -328,6 +356,14 @@ impl ClaudeSource {
         }
         let response = self.fetch_usage(&creds).await?;
         Self::parse_usage(response, creds.subscription_type).await
+    }
+
+    pub fn force_next(&mut self) {
+        let backing_off = self.backoff_secs >= BACKOFF_MIN_SECS
+            && self.next_attempt.is_some_and(|at| at > Instant::now());
+        if !backing_off {
+            self.next_attempt = None;
+        }
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -420,7 +456,10 @@ impl ClaudeSource {
         apply_refresh(&mut current, &refreshed, Utc::now().timestamp_millis());
         write_atomic(path, &current).map_err(|_| REFRESH_FAILED)?;
         self.unpersisted_refresh_token = None;
-        serde_json::from_value(current["claudeAiOauth"].take()).map_err(|_| REFRESH_FAILED.into())
+        let oauth =
+            serde_json::from_value(current["claudeAiOauth"].take()).map_err(|_| REFRESH_FAILED)?;
+        activity::record("Claude", LogLevel::Ok, "Login renovado");
+        Ok(oauth)
     }
 
     async fn fetch_usage(&self, creds: &OauthBlob) -> Result<reqwest::Response, String> {
@@ -695,6 +734,35 @@ mod tests {
 #[cfg(test)]
 mod backoff_tests {
     use super::*;
+
+    #[test]
+    fn force_next_preserves_active_rate_limit_backoff() {
+        let mut source = ClaudeSource {
+            last_remote: None,
+            next_attempt: None,
+            backoff_secs: BACKOFF_MIN_SECS / 2,
+            #[cfg(not(target_os = "macos"))]
+            last_refresh_attempt: None,
+            #[cfg(not(target_os = "macos"))]
+            unpersisted_refresh_token: None,
+            client: reqwest::Client::new(),
+        };
+        let now = Instant::now();
+        source.next_attempt = Some(now + std::time::Duration::from_secs(REMOTE_TTL_SECS));
+        source.force_next();
+        assert_eq!(source.next_attempt, None);
+
+        let wait = next_wait(&Err("429:600".into()), &mut source.backoff_secs);
+        let backoff = now + std::time::Duration::from_secs(wait);
+        source.next_attempt = Some(backoff);
+        source.force_next();
+        assert_eq!(source.next_attempt, Some(backoff));
+
+        source.next_attempt = Some(now);
+        source.force_next();
+        assert_eq!(source.next_attempt, None);
+    }
+
 
     #[test]
     fn rate_limits_back_off_and_success_resets() {

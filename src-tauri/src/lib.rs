@@ -1,3 +1,4 @@
+mod activity;
 mod chats;
 mod chats_claude;
 mod chats_codex;
@@ -21,6 +22,7 @@ use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tokio::sync::Mutex;
 
 struct Sources {
+    poll: Mutex<()>,
     claude: Mutex<claude::ClaudeSource>,
     codex: Mutex<codex_live::CodexLive>,
     cloud: Mutex<cloud_claude::CloudClaude>,
@@ -28,6 +30,7 @@ struct Sources {
 
 #[tauri::command]
 async fn snapshot(sources: State<'_, Sources>) -> Result<Snapshot, String> {
+    let _poll = sources.poll.lock().await;
     let claude = sources.claude.lock().await.read().await;
     let cloud = sources.cloud.lock().await.read().await;
     let (codex_local, (environments, projects)) = tauri::async_runtime::spawn_blocking(move || {
@@ -46,6 +49,22 @@ async fn snapshot(sources: State<'_, Sources>) -> Result<Snapshot, String> {
         environments,
         taken_at: chrono::Utc::now().to_rfc3339(),
     })
+}
+
+#[tauri::command]
+async fn refresh(sources: State<'_, Sources>) -> Result<(), String> {
+    let _poll = sources.poll.lock().await;
+    activity::record("App", activity::LogLevel::Ok, "Actualización manual");
+    sources.claude.lock().await.force_next();
+    sources.codex.lock().await.force_next();
+    sources.cloud.lock().await.force_next();
+    chats_remote::force_next();
+    Ok(())
+}
+
+#[tauri::command]
+fn logs() -> Vec<activity::LogEntry> {
+    activity::entries()
 }
 
 #[derive(Serialize)]
@@ -224,6 +243,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .manage(Sources {
+            poll: Mutex::new(()),
             claude: Mutex::new(claude::ClaudeSource::new()),
             codex: Mutex::new(codex_live::CodexLive::new()),
             cloud: Mutex::new(cloud_claude::CloudClaude::new()),
@@ -238,9 +258,10 @@ pub fn run() {
             place_top_right(&window);
             window.show()?;
             build_tray(app.handle())?;
+            activity::record("App", activity::LogLevel::Ok, "Widget iniciado");
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![snapshot, platform_info])
+        .invoke_handler(tauri::generate_handler![snapshot, refresh, logs, platform_info])
         .run(tauri::generate_context!())
         .expect("error while running Agent Gauge");
 }

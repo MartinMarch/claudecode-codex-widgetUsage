@@ -6,6 +6,7 @@
 //! `remote_codex.sh` over SSH (key auth only, `BatchMode`, short timeout) and
 //! turn its metadata lines into `Chat`s. Results are cached per host.
 
+use crate::activity::{self, LogLevel};
 use crate::model::{Chat, EnvKind, Environment, Provider, Subagent};
 use crate::tail::{folder_name, AWAKE_SECS, LIST_SECS, WORKING_SECS};
 use chrono::{SecondsFormat, TimeZone, Utc};
@@ -122,20 +123,25 @@ fn scan_sessions(roots: &[PathBuf]) -> SessionIndex {
             }
         }
     }
-    index.targets.sort_by_key(|(last, _)| std::cmp::Reverse(*last));
+    index
+        .targets
+        .sort_by_key(|(last, _)| std::cmp::Reverse(*last));
     index
 }
 
+static SESSIONS: Mutex<Option<(Instant, SessionIndex)>> = Mutex::new(None);
+
 fn with_sessions<T>(f: impl FnOnce(&SessionIndex) -> T) -> T {
-    static SESSIONS: OnceLock<Mutex<(Instant, SessionIndex)>> = OnceLock::new();
-    let mut cached = SESSIONS
-        .get_or_init(|| Mutex::new((Instant::now(), scan_sessions(&session_roots()))))
-        .lock()
-        .unwrap_or_else(|err| err.into_inner());
-    if cached.0.elapsed().as_secs() >= SESSION_CACHE_SECS {
-        *cached = (Instant::now(), scan_sessions(&session_roots()));
+    let mut cached = SESSIONS.lock().unwrap_or_else(|err| err.into_inner());
+    if cached
+        .as_ref()
+        .is_some_and(|(at, _)| at.elapsed().as_secs() >= SESSION_CACHE_SECS)
+    {
+        *cached = None;
     }
-    f(&cached.1)
+    let (_, index) =
+        cached.get_or_insert_with(|| (Instant::now(), scan_sessions(&session_roots())));
+    f(index)
 }
 
 pub fn host_for_cli_session(cli_session_id: &str) -> Option<String> {
@@ -278,7 +284,12 @@ pub fn parse(output: &str, host: &str) -> (Option<String>, Vec<Chat>) {
     (hostname, chats)
 }
 
-fn run_ssh(target: &SshTarget) -> Option<String> {
+enum SshError {
+    Failed,
+    Timeout,
+}
+
+fn run_ssh(target: &SshTarget) -> Result<String, SshError> {
     let mut cmd = Command::new("ssh");
     cmd.args([
         "-o",
@@ -302,34 +313,40 @@ fn run_ssh(target: &SshTarget) -> Option<String> {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: no console flashing
     }
-    let mut child = cmd.spawn().ok()?;
+    let mut child = cmd.spawn().map_err(|_| SshError::Failed)?;
     // Drain output concurrently so the 24-hour listing cannot fill the SSH pipe.
-    let mut stdout = child.stdout.take()?;
+    let mut stdout = child.stdout.take().ok_or(SshError::Failed)?;
     let reader = std::thread::spawn(move || {
         let mut output = String::new();
         stdout.read_to_string(&mut output).ok().map(|_| output)
     });
     // A Windows checkout may turn the script's line endings into CRLF; sh needs LF.
     let script = SCRIPT.replace('\r', "");
-    if child.stdin.take()?.write_all(script.as_bytes()).is_err() {
+    if child
+        .stdin
+        .take()
+        .ok_or(SshError::Failed)?
+        .write_all(script.as_bytes())
+        .is_err()
+    {
         let _ = child.kill();
         let _ = child.wait();
-        return None;
+        return Err(SshError::Failed);
     }
     let started = Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => break,
-            Ok(Some(_)) | Err(_) => return None,
+            Ok(Some(_)) | Err(_) => return Err(SshError::Failed),
             Ok(None) if started.elapsed() > SSH_TIMEOUT => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return None;
+                return Err(SshError::Timeout);
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),
         }
     }
-    reader.join().ok().flatten()
+    reader.join().ok().flatten().ok_or(SshError::Failed)
 }
 
 struct HostReading {
@@ -345,6 +362,24 @@ fn cache() -> &'static HostCache {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+pub fn force_next() {
+    cache()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clear();
+    *SESSIONS.lock().unwrap_or_else(|err| err.into_inner()) = None;
+}
+
+// The connection target can include a username. Only the host belongs in the log.
+fn log_host(value: &str) -> Option<&str> {
+    let host = value.rsplit('@').next()?;
+    (!host.is_empty()
+        && host
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b".-_:[]%".contains(&byte)))
+    .then_some(host)
+}
+
 /// Active Codex chats on every SSH host a recent desktop chat is connected to.
 pub fn read(now_ms: i64) -> Vec<Chat> {
     let mut all = Vec::new();
@@ -356,9 +391,31 @@ pub fn read(now_ms: i64) -> Vec<Chat> {
         });
         let chats = cached.unwrap_or_else(|| {
             // A host we cannot reach is remembered as empty for the cache period.
-            let (hostname, chats) = run_ssh(&target)
-                .map(|out| parse(&out, &target.host))
-                .unwrap_or_default();
+            let source_host = log_host(&target.host).unwrap_or("servidor");
+            let source = format!("SSH {source_host}");
+            let (hostname, chats) = match run_ssh(&target) {
+                Ok(out) => {
+                    let (hostname, chats) = parse(&out, &target.host);
+                    let name = hostname
+                        .as_deref()
+                        .and_then(log_host)
+                        .unwrap_or(source_host);
+                    activity::record(
+                        &source,
+                        LogLevel::Ok,
+                        format!("{} sesiones de Codex en {name}", chats.len()),
+                    );
+                    (hostname, chats)
+                }
+                Err(error) => {
+                    let message = match error {
+                        SshError::Failed => "No se pudo entrar por SSH. ¿Está autorizada tu clave?",
+                        SshError::Timeout => "El servidor no respondió en 8 s",
+                    };
+                    activity::record(&source, LogLevel::Error, message);
+                    (None, vec![])
+                }
+            };
             if let Ok(mut c) = cache().lock() {
                 let hostname = hostname.or_else(|| {
                     c.get(&target.host)

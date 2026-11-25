@@ -8,6 +8,7 @@
 //! The token is only read, never refreshed or rewritten, and only sent to
 //! chatgpt.com. When anything fails the log-based numbers stay in place.
 
+use crate::activity::{self, LogLevel};
 use crate::model::{LimitWindow, ProviderUsage, Status};
 use chrono::{TimeZone, Utc};
 use serde::Deserialize;
@@ -16,6 +17,7 @@ use std::time::Instant;
 
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const TTL_SECS: u64 = 60;
+const NO_LOGIN: &str = "No hay login de Codex (`codex login`)";
 
 #[derive(Deserialize)]
 struct Auth {
@@ -63,7 +65,9 @@ fn window(w: &WhamWindow, default_minutes: u32) -> LimitWindow {
 
 /// Puts the live limits over the log-based reading, keeping its local token count.
 pub fn overlay(local: ProviderUsage, live: &WhamUsage) -> ProviderUsage {
-    let Some(limits) = &live.rate_limit else { return local };
+    let Some(limits) = &live.rate_limit else {
+        return local;
+    };
     let primary = limits.primary_window.as_ref().map(|w| window(w, 300));
     if primary.is_none() {
         return local;
@@ -96,6 +100,10 @@ impl CodexLive {
         }
     }
 
+    pub fn force_next(&mut self) {
+        self.last = None;
+    }
+
     /// Latest live limits, cached for a minute. `None` when unavailable.
     pub async fn read(&mut self, codex_home: Option<&Path>) -> Option<WhamUsage> {
         let fresh = self
@@ -105,7 +113,26 @@ impl CodexLive {
         if !fresh {
             let result = match codex_home {
                 Some(home) => self.fetch(home).await,
-                None => None,
+                None => Err((LogLevel::Warn, NO_LOGIN.into())),
+            };
+            let result = match result {
+                Ok(usage) => {
+                    let limits = usage.rate_limit.as_ref();
+                    activity::record_usage(
+                        "Codex",
+                        limits
+                            .and_then(|rate| rate.primary_window.as_ref())
+                            .and_then(|window| window.used_percent),
+                        limits
+                            .and_then(|rate| rate.secondary_window.as_ref())
+                            .and_then(|window| window.used_percent),
+                    );
+                    Some(usage)
+                }
+                Err((level, message)) => {
+                    activity::record("Codex", level, message);
+                    None
+                }
             };
             // A failed attempt keeps the previous good numbers.
             let keep = result.is_none() && matches!(self.last, Some((_, Some(_))));
@@ -120,18 +147,35 @@ impl CodexLive {
         self.last.as_ref().and_then(|(_, u)| u.clone())
     }
 
-    async fn fetch(&self, home: &Path) -> Option<WhamUsage> {
-        let raw = std::fs::read_to_string(home.join("auth.json")).ok()?;
-        let tokens = serde_json::from_str::<Auth>(&raw).ok()?.tokens?;
+    async fn fetch(&self, home: &Path) -> Result<WhamUsage, (LogLevel, String)> {
+        let raw = std::fs::read_to_string(home.join("auth.json")).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                (LogLevel::Warn, NO_LOGIN.into())
+            } else {
+                (LogLevel::Error, "No se pudo leer el login de Codex".into())
+            }
+        })?;
+        let tokens = serde_json::from_str::<Auth>(&raw)
+            .map_err(|_| (LogLevel::Error, "No se pudo leer el login de Codex".into()))?
+            .tokens
+            .ok_or_else(|| (LogLevel::Warn, NO_LOGIN.into()))?;
         let mut req = self.client.get(USAGE_URL).bearer_auth(&tokens.access_token);
         if let Some(account) = &tokens.account_id {
             req = req.header("ChatGPT-Account-Id", account);
         }
-        let resp = req.send().await.ok()?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|_| (LogLevel::Error, "Sin conexión con OpenAI".into()))?;
         if !resp.status().is_success() {
-            return None;
+            return Err((
+                LogLevel::Error,
+                format!("OpenAI respondió {}", resp.status().as_u16()),
+            ));
         }
-        resp.json::<WhamUsage>().await.ok()
+        resp.json::<WhamUsage>()
+            .await
+            .map_err(|_| (LogLevel::Error, "Respuesta inesperada de OpenAI".into()))
     }
 }
 

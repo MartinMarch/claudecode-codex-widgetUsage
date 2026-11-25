@@ -2,11 +2,11 @@ import "@fontsource-variable/unbounded";
 import "@fontsource-variable/manrope";
 import "./styles.css";
 
-import { fetchPlatform, fetchSnapshot, fitWindow, hideWindow } from "./api";
+import { fetchLogs, fetchPlatform, fetchSnapshot, fitWindow, hideWindow, refreshNow } from "./api";
 import { bossCritter, claudeCritter, codexCritter, fillCritter, whip } from "./critters";
 import { duration, folder, projection, since, tokens } from "./format";
 import { gauge } from "./gauge";
-import type { CrewMember, Project, Provider, ProviderUsage, Snapshot } from "./types";
+import type { CrewMember, LogEntry, Project, Provider, ProviderUsage, Snapshot } from "./types";
 
 const POLL_MS = 20_000;
 const NAMES = { claude: "Claude Code", codex: "Codex" } as const;
@@ -23,6 +23,53 @@ let firstPaint = true;
 // Which environment tab is open ("all" or an environment id), remembered per viewer.
 const ENV_KEY = "agent-gauge.env";
 const ALL_TAB_MAX = 4;
+
+// Activity panel ("i") and manual refresh.
+let infoOpen = false;
+let refreshing = false;
+let logs: LogEntry[] = [];
+/** True when the latest entry of some source is a warning or an error. */
+const hasAlert = () => {
+  const seen = new Set<string>();
+  return logs.some((e) => {
+    if (seen.has(e.source)) return false;
+    seen.add(e.source);
+    return e.level !== "ok";
+  });
+};
+const LEVEL_LABEL = { ok: "Correcto", warn: "Aviso", error: "Error" } as const;
+
+function clock(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
+}
+
+function infoPanel(): string {
+  const rows = logs.length
+    ? logs
+        .map(
+          (e) => `<li class="log log-${e.level}">
+            <span class="dot-${e.level}" title="${LEVEL_LABEL[e.level]}"></span>
+            <span class="log-time">${clock(e.at)}</span>
+            <span class="log-body"><b>${esc(e.source)}</b> ${rich(e.message)}${e.count > 1 ? ` <span class="log-count">×${e.count}</span>` : ""}</span>
+          </li>`,
+        )
+        .join("")
+    : `<li class="empty">Todavía no hay actividad.</li>`;
+  return `<section class="info" aria-label="Actividad">
+    <h2 class="projects-head">Actividad <span class="reset">· lo último arriba</span></h2>
+    <ul class="logs">${rows}</ul>
+    <p class="note">Si algo no se actualiza, aquí ves qué respondió cada servicio. Pulsa ↻ para leerlo todo de nuevo.</p>
+  </section>`;
+}
+
+async function loadLogs() {
+  try {
+    logs = await fetchLogs();
+  } catch {
+    logs = [];
+  }
+}
 let envFilter = (() => {
   try {
     return localStorage.getItem(ENV_KEY) ?? "all";
@@ -178,7 +225,13 @@ function render(s: Snapshot, prev: Snapshot | null) {
   <header class="bar-top" data-tauri-drag-region>
     <span class="updated" data-tauri-drag-region>Actualizado ${since(s.takenAt)}</span>
     <span class="pill" data-tauri-drag-region>${pill(s.claude)}${pill(s.codex)}</span>
-    <span class="controls">
+    <span class="controls${hasAlert() ? " has-alert" : ""}">
+      <button type="button" data-act="refresh" class="${refreshing ? "is-spinning" : ""}" aria-label="Actualizar ahora" title="Actualizar ahora">
+        <svg viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.55M13 3v3h-3"/></svg>
+      </button>
+      <button type="button" data-act="info" class="${infoOpen ? "is-on" : ""}${hasAlert() ? " is-alert" : ""}" aria-label="Actividad y errores" title="Actividad y errores" aria-pressed="${infoOpen}">
+        <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 7.2v3.6M8 5.1v.1"/></svg>
+      </button>
       <button type="button" data-act="compact" aria-label="${compact ? "Expandir" : "Compactar"}" title="${compact ? "Expandir" : "Compactar"}">
         <svg viewBox="0 0 16 16"><path d="${compact ? "M4 6l4 4 4-4" : "M4 10l4-4 4 4"}"/></svg>
       </button>
@@ -187,12 +240,16 @@ function render(s: Snapshot, prev: Snapshot | null) {
       </button>
     </span>
   </header>
-  <div class="accounts">${account(s.claude, busy.claude)}${account(s.codex, busy.codex)}</div>
-  <section class="projects" aria-label="Proyectos activos">
+  ${infoOpen ? infoPanel() : `<div class="accounts">${account(s.claude, busy.claude)}${account(s.codex, busy.codex)}</div>`}
+  ${
+    infoOpen
+      ? ""
+      : `<section class="projects" aria-label="Proyectos activos">
     <h2 class="projects-head">Proyectos</h2>
     ${tabs(s)}
     ${projectsFor(s)}
-  </section>`;
+  </section>`
+  }`;
 
   // Live usage: when a percentage rose since the last reading, bump it and float "+N %".
   for (const u of [s.claude, s.codex]) {
@@ -232,6 +289,26 @@ root.addEventListener("click", async (e) => {
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-act]");
   if (!btn) return;
   if (btn.dataset.act === "hide") return hideWindow();
+  if (btn.dataset.act === "info") {
+    infoOpen = !infoOpen;
+    if (infoOpen) await loadLogs();
+    if (last) render(last, null);
+    return;
+  }
+  if (btn.dataset.act === "refresh") {
+    if (refreshing) return;
+    refreshing = true;
+    if (last) render(last, null);
+    try {
+      await refreshNow();
+      await tick();
+    } finally {
+      refreshing = false;
+      await loadLogs();
+      if (last) render(last, null);
+    }
+    return;
+  }
   compact = !compact;
   document.body.classList.toggle("compact", compact);
   if (last) render(last, null);
@@ -243,6 +320,7 @@ new ResizeObserver(() => fitWindow(root.offsetHeight)).observe(root);
 async function tick() {
   try {
     const next = await fetchSnapshot();
+    await loadLogs();
     render(next, last);
     last = next;
   } catch (err) {

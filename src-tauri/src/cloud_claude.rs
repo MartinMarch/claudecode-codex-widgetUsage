@@ -5,6 +5,7 @@
 //! Claude Code login. Only metadata is used: repository, title, status,
 //! last update and context usage. Cached for a minute; HTTP 429 backs off.
 
+use crate::activity::{self, LogLevel};
 use crate::model::{Chat, Provider};
 use crate::tail::{AWAKE_SECS, LIST_SECS};
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -14,6 +15,12 @@ use std::time::{Duration, Instant};
 const SESSIONS_URL: &str = "https://api.anthropic.com/v1/sessions?beta=true";
 const BETA: &str = "ccr-byoc-2025-07-29";
 const TTL_SECS: u64 = 60;
+const BACKOFF_MIN_SECS: u64 = 120;
+
+enum CloudError {
+    RateLimited,
+    Other(String),
+}
 
 /// `owner/name` of the session's first GitHub repository.
 fn repo_of(session: &Value) -> Option<String> {
@@ -103,31 +110,65 @@ impl CloudClaude {
         }
     }
 
+    pub fn force_next(&mut self) {
+        let backing_off = self.backoff_secs >= BACKOFF_MIN_SECS
+            && self.next_attempt.is_some_and(|at| at > Instant::now());
+        if !backing_off {
+            self.next_attempt = None;
+        }
+    }
+
     /// Cloud sessions of the last 24 h; the previous list when a call fails.
     pub async fn read(&mut self) -> Vec<Chat> {
         if self.next_attempt.is_some_and(|at| Instant::now() < at) {
             return self.last.clone();
         }
-        let (result, rate_limited) = self.fetch().await;
-        let wait = if rate_limited {
-            self.backoff_secs = (self.backoff_secs * 2).clamp(120, 900);
-            self.backoff_secs
-        } else {
-            self.backoff_secs = 60;
-            TTL_SECS
+        let result = self.fetch().await;
+        let wait = match result {
+            Err(CloudError::RateLimited) => {
+                self.backoff_secs = (self.backoff_secs * 2).clamp(BACKOFF_MIN_SECS, 900);
+                activity::record(
+                    "Nube",
+                    LogLevel::Warn,
+                    format!(
+                        "Anthropic limita las consultas (429). Próximo intento en {} min",
+                        self.backoff_secs.div_ceil(60)
+                    ),
+                );
+                self.backoff_secs
+            }
+            _ => {
+                self.backoff_secs = BACKOFF_MIN_SECS / 2;
+                TTL_SECS
+            }
         };
         self.next_attempt = Some(Instant::now() + Duration::from_secs(wait));
-        if let Some(chats) = result {
-            self.last = chats;
+        match result {
+            Ok(chats) => {
+                activity::record(
+                    "Nube",
+                    LogLevel::Ok,
+                    format!("{} sesiones en la nube", chats.len()),
+                );
+                self.last = chats;
+            }
+            Err(CloudError::Other(message)) => activity::record("Nube", LogLevel::Error, message),
+            Err(CloudError::RateLimited) => {}
         }
         self.last.clone()
     }
 
-    async fn fetch(&self) -> (Option<Vec<Chat>>, bool) {
-        let (Some(token), Some(org)) = (crate::claude::access_token(), crate::claude::organization_uuid()) else {
-            return (None, false);
+    async fn fetch(&self) -> Result<Vec<Chat>, CloudError> {
+        let (Some(token), Some(org)) = (
+            crate::claude::access_token(),
+            crate::claude::organization_uuid(),
+        ) else {
+            return Err(CloudError::Other(
+                "No se pudo leer el login de Claude. Abre Claude Code y vuelve a iniciar sesión."
+                    .into(),
+            ));
         };
-        let resp = match self
+        let resp = self
             .client
             .get(SESSIONS_URL)
             .bearer_auth(token)
@@ -136,19 +177,21 @@ impl CloudClaude {
             .header("x-organization-uuid", org)
             .send()
             .await
-        {
-            Ok(resp) => resp,
-            Err(_) => return (None, false),
-        };
+            .map_err(|_| CloudError::Other("Sin conexión con Anthropic".into()))?;
         if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            return (None, true);
+            return Err(CloudError::RateLimited);
         }
         if !resp.status().is_success() {
-            return (None, false);
+            return Err(CloudError::Other(format!(
+                "Anthropic respondió {}",
+                resp.status().as_u16()
+            )));
         }
         match resp.json::<Value>().await {
-            Ok(body) => (Some(parse_sessions(&body, Utc::now())), false),
-            Err(_) => (None, false),
+            Ok(body) => Ok(parse_sessions(&body, Utc::now())),
+            Err(_) => Err(CloudError::Other(
+                "Respuesta inesperada de Anthropic".into(),
+            )),
         }
     }
 }

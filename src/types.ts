@@ -90,3 +90,15 @@ export interface PlatformInfo {
   os: string;
   nativeBlur: boolean;
 }
+
+export type LogLevel = "ok" | "warn" | "error";
+
+/** One line of the activity log (src-tauri/src/activity.rs). Newest first. */
+export interface LogEntry {
+  at: string;
+  source: string;
+  level: LogLevel;
+  message: string;
+  /** How many times in a row this same message happened. */
+  count: number;
+}
