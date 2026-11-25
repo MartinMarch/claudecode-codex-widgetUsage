@@ -15,7 +15,9 @@ const KIND_LABEL = { codex: "Codex", "codex-sub": "Subagente de Codex", "claude-
 
 const root = document.getElementById("app")!;
 let last: Snapshot | null = null;
-let compact = false;
+// `?compact=1` opens the browser preview already folded (used for README screenshots).
+let compact = new URLSearchParams(location.search).has("compact");
+if (compact) document.body.classList.add("compact");
 let firstPaint = true;
 
 // Which environment tab is open ("all" or an environment id), remembered per viewer.
