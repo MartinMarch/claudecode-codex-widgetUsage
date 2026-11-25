@@ -42,10 +42,32 @@ export interface Chat {
   moreSubagents: number;
 }
 
+export type CrewKind = "codex" | "codex-sub" | "claude-chat" | "claude-sub";
+
+export interface CrewMember {
+  id: string;
+  kind: CrewKind;
+  name: string;
+  working: boolean;
+  contextPercent: number | null;
+  lastActivity: string;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  cwd: string | null;
+  lastActivity: string;
+  working: boolean;
+  boss: Chat | null;
+  crew: CrewMember[];
+  moreCrew: number;
+}
+
 export interface Snapshot {
   claude: ProviderUsage;
   codex: ProviderUsage;
-  chats: Chat[];
+  projects: Project[];
   takenAt: string;
 }
 

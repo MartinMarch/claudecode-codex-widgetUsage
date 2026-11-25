@@ -87,8 +87,8 @@ function render(s: Snapshot) {
   </header>
   <div class="meters">${card(s.claude)}${card(s.codex)}</div>
   <section class="procs" aria-label="Sesiones en marcha">
-    <h2 class="procs-head">En marcha <span>${s.chats.length}</span></h2>
-    ${s.chats.length ? "" : `<p class="empty">Ninguna sesión abierta. Lanza <code>claude</code> o <code>codex</code> en una terminal y aparecerá aquí.</p>`}
+    <h2 class="procs-head">En marcha <span>${s.projects.length}</span></h2>
+    ${s.projects.length ? "" : `<p class="empty">Ninguna sesión abierta. Lanza <code>claude</code> o <code>codex</code> en una terminal y aparecerá aquí.</p>`}
   </section>`;
 
   if (firstPaint) {

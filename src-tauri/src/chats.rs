@@ -1,50 +1,132 @@
-use crate::model::Chat;
+use crate::model::{Chat, CrewKind, CrewMember, Project, Provider, Subagent};
+use crate::tail::folder_name;
 use crate::{chats_claude, chats_codex, claude, codex};
+use std::collections::BTreeMap;
 use std::time::SystemTime;
 
-const MAX_CHATS: usize = 5;
-const MAX_SUBAGENTS: usize = 3;
+const MAX_PROJECTS: usize = 4;
+const MAX_CREW: usize = 8;
 
-pub fn select(mut all: Vec<Chat>) -> Vec<Chat> {
-    // Both readers emit fixed-width UTC timestamps, so lexical order is chronological.
-    all.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
-    if all.len() > MAX_CHATS {
-        let provider = all[0].provider;
-        if all[..MAX_CHATS]
-            .iter()
-            .all(|chat| chat.provider == provider)
-        {
-            if let Some(other) = all[MAX_CHATS..]
-                .iter()
-                .position(|chat| chat.provider != provider)
-            {
-                all.swap(MAX_CHATS - 1, MAX_CHATS + other);
-            }
-        }
-        all.truncate(MAX_CHATS);
+pub fn normalize_cwd(cwd: &str) -> String {
+    let cwd = cwd.trim_end_matches(['\\', '/']);
+    if cfg!(windows) {
+        cwd.to_lowercase()
+    } else {
+        cwd.to_owned()
     }
-    for chat in &mut all {
-        chat.subagents
-            .sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
-        let remaining = chat.subagents.len().saturating_sub(MAX_SUBAGENTS);
-        chat.more_subagents = u32::try_from(remaining).unwrap_or(u32::MAX);
-        chat.subagents.truncate(MAX_SUBAGENTS);
-    }
-    all
 }
 
-pub fn read_all(now: SystemTime) -> Vec<Chat> {
+pub fn group(all: Vec<Chat>) -> Vec<Project> {
+    let mut folders = BTreeMap::<_, Vec<_>>::new();
+    for chat in all {
+        folders
+            .entry(chat.cwd.as_deref().map(normalize_cwd))
+            .or_default()
+            .push(chat);
+    }
+    let mut projects: Vec<_> = folders
+        .into_iter()
+        .map(|(id, chats)| project(id.unwrap_or_else(|| "sin-carpeta".into()), chats))
+        .collect();
+    projects.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+    projects.truncate(MAX_PROJECTS);
+    projects
+}
+
+fn project(id: String, mut chats: Vec<Chat>) -> Project {
+    // The readers emit fixed-width UTC timestamps, so lexical order is chronological.
+    let boss_index = chats
+        .iter()
+        .enumerate()
+        .filter(|(_, chat)| chat.provider == Provider::Claude)
+        .max_by(|(_, a), (_, b)| a.last_activity.cmp(&b.last_activity))
+        .map(|(index, _)| index);
+    let mut boss = boss_index.map(|index| chats.remove(index));
+    let cwd = boss
+        .as_ref()
+        .or_else(|| chats.first())
+        .and_then(|chat| chat.cwd.clone());
+    let name = cwd
+        .as_deref()
+        .map_or("Sin carpeta", |cwd| folder_name(cwd).unwrap_or(cwd));
+
+    let mut crew = Vec::new();
+    if let Some(boss) = &mut boss {
+        crew.extend(subagent_members(
+            std::mem::take(&mut boss.subagents),
+            CrewKind::ClaudeSub,
+        ));
+        boss.more_subagents = 0;
+    }
+    for chat in chats {
+        let kind = match chat.provider {
+            Provider::Claude => CrewKind::ClaudeChat,
+            Provider::Codex => {
+                crew.extend(subagent_members(chat.subagents, CrewKind::CodexSub));
+                CrewKind::Codex
+            }
+        };
+        crew.push(CrewMember {
+            id: chat.id,
+            kind,
+            name: chat.title,
+            working: chat.working,
+            context_percent: chat.context_percent,
+            last_activity: chat.last_activity,
+        });
+    }
+
+    let last_activity = crew
+        .iter()
+        .map(|member| member.last_activity.as_str())
+        .chain(boss.iter().map(|chat| chat.last_activity.as_str()))
+        .max()
+        .unwrap_or_default()
+        .to_owned();
+    let working =
+        boss.as_ref().is_some_and(|chat| chat.working) || crew.iter().any(|member| member.working);
+    crew.sort_by(|a, b| {
+        b.working
+            .cmp(&a.working)
+            .then_with(|| b.last_activity.cmp(&a.last_activity))
+    });
+    let more_crew = u32::try_from(crew.len().saturating_sub(MAX_CREW)).unwrap_or(u32::MAX);
+    crew.truncate(MAX_CREW);
+    Project {
+        id,
+        name: name.to_owned(),
+        cwd,
+        last_activity,
+        working,
+        boss,
+        crew,
+        more_crew,
+    }
+}
+
+fn subagent_members(agents: Vec<Subagent>, kind: CrewKind) -> impl Iterator<Item = CrewMember> {
+    agents.into_iter().map(move |agent| CrewMember {
+        id: agent.id,
+        kind,
+        name: agent.name,
+        working: agent.working,
+        context_percent: None,
+        last_activity: agent.last_activity,
+    })
+}
+
+pub fn read_all(now: SystemTime) -> Vec<Project> {
     let mut all = claude::config_dir().map_or_else(Vec::new, |root| chats_claude::read(&root, now));
     if let Some(home) = codex::home() {
         all.extend(chats_codex::read(&home, now));
     }
-    select(all)
+    group(all)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::select;
-    use crate::model::{Chat, Provider, Subagent};
+    use super::group;
+    use crate::model::{Chat, CrewKind, Provider, Subagent};
 
     fn chat(second: u8, provider: Provider) -> Chat {
         Chat {
@@ -55,7 +137,7 @@ mod tests {
             last_activity: format!("2026-11-25T00:00:{second:02}Z"),
             working: false,
             from_claude: false,
-            context_percent: None,
+            context_percent: Some(f64::from(second)),
             context_approx: false,
             subagents: vec![],
             more_subagents: 0,
@@ -63,37 +145,110 @@ mod tests {
     }
 
     #[test]
-    fn keeps_five_most_recent() {
-        let chats = select((1..=7).map(|i| chat(i, Provider::Claude)).collect());
-        let ids: Vec<_> = chats.iter().map(|c| c.id.as_str()).collect();
-        assert_eq!(ids, ["7", "6", "5", "4", "3"]);
+    fn groups_by_folder_ignoring_case_and_trailing_slash() {
+        let mut claude = chat(1, Provider::Claude);
+        claude.cwd = Some(r"C:\Code\App\".into());
+        let mut codex = chat(3, Provider::Codex);
+        let codex_cwd = if cfg!(windows) {
+            r"c:\code\app"
+        } else {
+            r"C:\Code\App"
+        };
+        codex.cwd = Some(codex_cwd.into());
+        let projects = group(vec![claude, codex]);
+        assert_eq!(projects.len(), 1);
+        let project = &projects[0];
+        assert_eq!(project.id, codex_cwd);
+        assert_eq!(project.name, "App");
+        assert_eq!(project.boss.as_ref().unwrap().id, "1");
+        assert_eq!(project.crew.len(), 1);
+        assert_eq!(project.crew[0].kind, CrewKind::Codex);
+        assert_eq!(project.crew[0].context_percent, Some(3.0));
     }
 
     #[test]
-    fn guarantees_one_codex_chat() {
-        let mut all: Vec<_> = (2..=7).map(|i| chat(i, Provider::Claude)).collect();
-        all.push(chat(1, Provider::Codex));
-        let chats = select(all);
-        let ids: Vec<_> = chats.iter().map(|c| c.id.as_str()).collect();
-        assert_eq!(ids, ["7", "6", "5", "4", "1"]);
-        assert_eq!(chats[4].provider, Provider::Codex);
+    fn boss_subagents_become_crew() {
+        let mut boss = chat(2, Provider::Claude);
+        boss.subagents = vec![subagent(3, false), subagent(4, true)];
+        let projects = group(vec![boss]);
+        let project = &projects[0];
+        assert!(project.boss.as_ref().unwrap().subagents.is_empty());
+        assert_eq!(project.crew.len(), 2);
+        assert!(project
+            .crew
+            .iter()
+            .all(|member| member.kind == CrewKind::ClaudeSub));
+        assert_eq!(project.crew[0].name, "Agente 4");
+        assert!(project.working);
+        assert_eq!(project.last_activity, project.crew[0].last_activity);
     }
 
     #[test]
-    fn trims_subagents_to_three() {
-        let mut parent = chat(0, Provider::Claude);
-        parent.subagents = (1..=5)
-            .map(|i| Subagent {
-                id: i.to_string(),
-                name: "Prueba".into(),
-                kind: None,
-                last_activity: chat(i, Provider::Claude).last_activity,
-                working: false,
+    fn codex_only_project_has_no_boss() {
+        let mut codex = chat(1, Provider::Codex);
+        codex.subagents.push(subagent(2, false));
+        let projects = group(vec![codex, chat(3, Provider::Codex)]);
+        assert_eq!(projects.len(), 1);
+        let project = &projects[0];
+        assert!(project.boss.is_none());
+        assert_eq!(project.id, "sin-carpeta");
+        assert_eq!(project.name, "Sin carpeta");
+        assert!(project.cwd.is_none());
+        let sub = &project.crew[1];
+        assert_eq!(sub.kind, CrewKind::CodexSub);
+        assert_eq!(sub.name, "Agente 2");
+        assert_eq!(sub.context_percent, None);
+    }
+
+    #[test]
+    fn crew_is_working_first_and_capped() {
+        let mut all = vec![chat(11, Provider::Claude)];
+        all.extend((1..=10).map(|i| {
+            let mut chat = chat(i, Provider::Claude);
+            chat.working = i <= 2;
+            chat
+        }));
+        let projects = group(all);
+        let project = &projects[0];
+        assert_eq!(project.boss.as_ref().unwrap().id, "11");
+        let ids: Vec<_> = project
+            .crew
+            .iter()
+            .map(|member| member.id.as_str())
+            .collect();
+        assert_eq!(ids, ["2", "1", "10", "9", "8", "7", "6", "5"]);
+        assert!(project
+            .crew
+            .iter()
+            .all(|member| member.kind == CrewKind::ClaudeChat));
+        assert_eq!(project.more_crew, 2);
+    }
+
+    #[test]
+    fn keeps_four_most_recent_projects() {
+        let mut all: Vec<_> = (1..=6)
+            .map(|i| {
+                let mut chat = chat(i, Provider::Claude);
+                chat.cwd = Some(format!("/code/project-{i}"));
+                chat
             })
             .collect();
-        let chats = select(vec![parent]);
-        let ids: Vec<_> = chats[0].subagents.iter().map(|a| a.id.as_str()).collect();
-        assert_eq!(ids, ["5", "4", "3"]);
-        assert_eq!(chats[0].more_subagents, 2);
+        all[0].subagents.push(subagent(10, false));
+        let projects = group(all);
+        let names: Vec<_> = projects
+            .iter()
+            .map(|project| project.name.as_str())
+            .collect();
+        assert_eq!(names, ["project-1", "project-6", "project-5", "project-4"]);
+    }
+
+    fn subagent(second: u8, working: bool) -> Subagent {
+        Subagent {
+            id: second.to_string(),
+            name: format!("Agente {second}"),
+            kind: None,
+            last_activity: chat(second, Provider::Claude).last_activity,
+            working,
+        }
     }
 }

@@ -91,11 +91,44 @@ pub struct Chat {
     pub more_subagents: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CrewKind {
+    Codex,
+    CodexSub,
+    ClaudeChat,
+    ClaudeSub,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrewMember {
+    pub id: String,
+    pub kind: CrewKind,
+    pub name: String,
+    pub working: bool,
+    pub context_percent: Option<f64>,
+    pub last_activity: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Project {
+    pub id: String,
+    pub name: String,
+    pub cwd: Option<String>,
+    pub last_activity: String,
+    pub working: bool,
+    pub boss: Option<Chat>,
+    pub crew: Vec<CrewMember>,
+    pub more_crew: u32,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     pub claude: ProviderUsage,
     pub codex: ProviderUsage,
-    pub chats: Vec<Chat>,
+    pub projects: Vec<Project>,
     pub taken_at: String,
 }
