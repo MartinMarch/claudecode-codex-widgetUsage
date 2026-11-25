@@ -52,6 +52,27 @@ fn platform_info(state: State<'_, BlurState>) -> PlatformInfo {
 
 struct BlurState(bool);
 
+/// Asks Windows 11 for its standard 8 px rounded corners explicitly, so the
+/// acrylic shape always matches the panel's `--radius: 8px` (styles.css).
+/// Harmless on Windows 10, which ignores the attribute.
+#[cfg(target_os = "windows")]
+fn round_corners(window: &WebviewWindow) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    };
+    let Ok(hwnd) = window.hwnd() else { return };
+    let pref = DWMWCP_ROUND;
+    // SAFETY: valid window handle owned by this process; pointer and size describe `pref`.
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd.0 as _,
+            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+            &pref as *const _ as *const core::ffi::c_void,
+            std::mem::size_of_val(&pref) as u32,
+        );
+    }
+}
+
 fn apply_glass(window: &WebviewWindow) -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -67,6 +88,7 @@ fn apply_glass(window: &WebviewWindow) -> bool {
     #[cfg(target_os = "windows")]
     {
         use window_vibrancy::{apply_acrylic, apply_blur};
+        round_corners(window);
         // On Windows 11 the system acrylic ignores this tint and follows the window
         // theme instead, so the window is pinned to the dark theme in tauri.conf.json;
         // otherwise a light Windows theme washes the glass out grey.
