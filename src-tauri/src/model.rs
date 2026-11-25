@@ -10,7 +10,7 @@ pub enum Provider {
 }
 
 /// One rate-limit window (e.g. the rolling 5 hour session, or the weekly cap).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LimitWindow {
     /// 0–100. `None` when the provider did not report it.

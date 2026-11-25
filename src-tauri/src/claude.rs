@@ -178,9 +178,52 @@ fn to_window(w: Option<ApiWindow>, minutes: u32) -> Option<LimitWindow> {
 
 type Limits = (Option<LimitWindow>, Option<LimitWindow>, Option<String>);
 
+/// `parse_usage` reports HTTP 429 as this prefix followed by the Retry-After seconds.
+const RATE_LIMITED: &str = "429:";
+/// After a 429, wait this long and double it each time (capped), so a rate
+/// limit is never prolonged by our own retries.
+const BACKOFF_MIN_SECS: u64 = 120;
+const BACKOFF_MAX_SECS: u64 = 900;
+
+/// Last good limits, kept on disk so a restart shows numbers right away.
+fn cache_path() -> Option<PathBuf> {
+    dirs::cache_dir().map(|d| d.join("agent-gauge").join("claude-limits.json"))
+}
+
+fn load_cached() -> Option<Limits> {
+    serde_json::from_str(&fs::read_to_string(cache_path()?).ok()?).ok()
+}
+
+fn save_cached(limits: &Limits) {
+    let Some(path) = cache_path() else { return };
+    if let Some(dir) = path.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+    if let Ok(json) = serde_json::to_string(limits) {
+        let _ = fs::write(path, json);
+    }
+}
+
+/// Seconds to wait before the next call, given the last result and the current backoff.
+fn next_wait(result: &Result<Limits, String>, backoff: &mut u64) -> u64 {
+    match result {
+        Err(msg) if msg.starts_with(RATE_LIMITED) => {
+            let retry_after = msg[RATE_LIMITED.len()..].parse::<u64>().unwrap_or(0);
+            *backoff = (*backoff * 2).clamp(BACKOFF_MIN_SECS, BACKOFF_MAX_SECS);
+            (*backoff).max(retry_after)
+        }
+        _ => {
+            *backoff = BACKOFF_MIN_SECS / 2;
+            REMOTE_TTL_SECS
+        }
+    }
+}
+
 /// Caches the remote call so the widget can poll often without hammering the API.
 pub struct ClaudeSource {
-    last_remote: Option<(Instant, Result<Limits, String>)>,
+    last_remote: Option<Result<Limits, String>>,
+    next_attempt: Option<Instant>,
+    backoff_secs: u64,
     #[cfg(not(target_os = "macos"))]
     last_refresh_attempt: Option<Instant>,
     #[cfg(not(target_os = "macos"))]
@@ -193,7 +236,9 @@ const REMOTE_TTL_SECS: u64 = 60;
 impl ClaudeSource {
     pub fn new() -> Self {
         Self {
-            last_remote: None,
+            last_remote: load_cached().map(Ok),
+            next_attempt: None,
+            backoff_secs: BACKOFF_MIN_SECS / 2,
             #[cfg(not(target_os = "macos"))]
             last_refresh_attempt: None,
             #[cfg(not(target_os = "macos"))]
@@ -218,28 +263,40 @@ impl ClaudeSource {
             );
         }
 
-        let fresh = self
-            .last_remote
-            .as_ref()
-            .map(|(t, _)| t.elapsed().as_secs() < REMOTE_TTL_SECS)
-            .unwrap_or(false);
-        if !fresh {
+        let due = self.next_attempt.is_none_or(|at| Instant::now() >= at);
+        if due {
             let result = self.fetch_remote().await;
-            // Keep the previous good numbers if this attempt failed (rate limit, offline...).
-            let keep_previous = result.is_err() && matches!(self.last_remote, Some((_, Ok(_))));
-            #[cfg(not(target_os = "macos"))]
-            let keep_previous = keep_previous
-                && !result
-                    .as_ref()
-                    .is_err_and(|message| message == REFRESH_FAILED);
-            if !keep_previous {
-                self.last_remote = Some((Instant::now(), result));
+            // Every attempt, good or bad, sets the next one: failures must not retry each poll.
+            let wait = next_wait(&result, &mut self.backoff_secs);
+            self.next_attempt = Some(Instant::now() + std::time::Duration::from_secs(wait));
+            match result {
+                Ok(limits) => {
+                    save_cached(&limits);
+                    self.last_remote = Some(Ok(limits));
+                }
+                Err(msg) => {
+                    // Keep the previous good numbers (rate limit, offline...).
+                    let keep_previous = matches!(self.last_remote, Some(Ok(_)));
+                    #[cfg(not(target_os = "macos"))]
+                    let keep_previous = keep_previous && msg != REFRESH_FAILED;
+                    if !keep_previous {
+                        let msg = if msg.starts_with(RATE_LIMITED) {
+                            format!(
+                                "Anthropic limita las consultas ahora mismo. Se reintentará en {} min.",
+                                wait.div_ceil(60)
+                            )
+                        } else {
+                            msg
+                        };
+                        self.last_remote = Some(Err(msg));
+                    }
+                }
             }
         }
 
         let now = Utc::now().to_rfc3339();
         match &self.last_remote {
-            Some((_, Ok((primary, secondary, plan)))) => ProviderUsage {
+            Some(Ok((primary, secondary, plan))) => ProviderUsage {
                 provider: Provider::Claude,
                 status: Status::Ok,
                 message: None,
@@ -249,7 +306,7 @@ impl ClaudeSource {
                 tokens_5h: tokens,
                 observed_at: Some(now),
             },
-            Some((_, Err(msg))) => ProviderUsage {
+            Some(Err(msg)) => ProviderUsage {
                 // Local token counts still work without the remote limits.
                 tokens_5h: tokens,
                 ..ProviderUsage::empty(Provider::Claude, Status::Error, msg.clone())
@@ -377,6 +434,15 @@ impl ClaudeSource {
     }
 
     async fn parse_usage(resp: reqwest::Response, plan: Option<String>) -> Result<Limits, String> {
+        if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let retry_after = resp
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .unwrap_or(0);
+            return Err(format!("{RATE_LIMITED}{retry_after}"));
+        }
         if !resp.status().is_success() {
             return Err(format!(
                 "Anthropic respondió {}. Se reintentará en un minuto.",
@@ -598,5 +664,38 @@ mod tests {
             original["claudeAiOauth"]["scopes"]
         );
         assert_eq!(saved["mcpOAuth"], original["mcpOAuth"]);
+    }
+}
+
+#[cfg(test)]
+mod backoff_tests {
+    use super::*;
+
+    #[test]
+    fn rate_limits_back_off_and_success_resets() {
+        let mut backoff = BACKOFF_MIN_SECS / 2;
+        let limited: Result<Limits, String> = Err(format!("{RATE_LIMITED}0"));
+        assert_eq!(next_wait(&limited, &mut backoff), 120);
+        assert_eq!(next_wait(&limited, &mut backoff), 240);
+        assert_eq!(next_wait(&limited, &mut backoff), 480);
+        assert_eq!(next_wait(&limited, &mut backoff), 900);
+        assert_eq!(next_wait(&limited, &mut backoff), 900, "capped at 15 min");
+        let ok: Result<Limits, String> = Ok((None, None, None));
+        assert_eq!(next_wait(&ok, &mut backoff), REMOTE_TTL_SECS);
+        assert_eq!(next_wait(&limited, &mut backoff), 120, "starts over after a success");
+    }
+
+    #[test]
+    fn retry_after_wins_when_longer() {
+        let mut backoff = BACKOFF_MIN_SECS / 2;
+        let limited: Result<Limits, String> = Err(format!("{RATE_LIMITED}1800"));
+        assert_eq!(next_wait(&limited, &mut backoff), 1800);
+    }
+
+    #[test]
+    fn other_errors_wait_the_normal_minute() {
+        let mut backoff = BACKOFF_MIN_SECS / 2;
+        let offline: Result<Limits, String> = Err("Sin conexión".into());
+        assert_eq!(next_wait(&offline, &mut backoff), REMOTE_TTL_SECS);
     }
 }
