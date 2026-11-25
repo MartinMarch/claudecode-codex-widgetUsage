@@ -24,7 +24,7 @@ pub fn home() -> Option<PathBuf> {
 }
 
 /// Session files from the most recent days, newest first.
-fn recent_session_files(sessions: &Path, max_days: usize) -> Vec<(SystemTime, PathBuf)> {
+pub(crate) fn recent_session_files(sessions: &Path, max_days: usize) -> Vec<(SystemTime, PathBuf)> {
     fn sorted_dirs(p: &Path) -> Vec<PathBuf> {
         let mut v: Vec<PathBuf> = fs::read_dir(p)
             .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect())

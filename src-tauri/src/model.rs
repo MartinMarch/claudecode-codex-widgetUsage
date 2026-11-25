@@ -67,16 +67,28 @@ impl ProviderUsage {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentProcess {
-    pub pid: u32,
+pub struct Subagent {
+    pub id: String,
+    pub name: String,
+    pub kind: Option<String>,
+    pub last_activity: String,
+    pub working: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Chat {
+    pub id: String,
     pub provider: Provider,
-    /// Working directory of the session, when the OS lets us read it.
+    pub title: String,
     pub cwd: Option<String>,
-    /// CPU usage in percent of one core.
-    pub cpu: f32,
-    pub memory_mb: f64,
-    /// Unix epoch seconds.
-    pub started_at: u64,
+    pub last_activity: String,
+    pub working: bool,
+    pub from_claude: bool,
+    pub context_percent: Option<f64>,
+    pub context_approx: bool,
+    pub subagents: Vec<Subagent>,
+    pub more_subagents: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -84,6 +96,6 @@ pub struct AgentProcess {
 pub struct Snapshot {
     pub claude: ProviderUsage,
     pub codex: ProviderUsage,
-    pub processes: Vec<AgentProcess>,
+    pub chats: Vec<Chat>,
     pub taken_at: String,
 }

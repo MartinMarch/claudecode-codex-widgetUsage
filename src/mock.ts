@@ -17,7 +17,7 @@ export function mockSnapshot(): Snapshot {
       message: "La sesión de Claude Code caducó. Abre `claude` una vez para renovarla." };
     base.codex = { ...base.codex, status: "unavailable", primary: null, secondary: null, tokens5h: null, plan: null,
       message: "Codex no está instalado en este equipo." };
-    base.processes = [];
+    base.chats = [];
   }
   return base;
 }
@@ -25,8 +25,6 @@ export function mockSnapshot(): Snapshot {
 function normal(): Snapshot {
   const now = Date.now();
   const at = (min: number) => new Date(now + min * 60_000).toISOString();
-  const ago = (min: number) => Math.floor((now - min * 60_000) / 1000);
-  const jitter = (n: number) => Math.max(0, n + (Math.random() - 0.5) * 6);
   return {
     takenAt: new Date(now).toISOString(),
     claude: {
@@ -49,10 +47,15 @@ function normal(): Snapshot {
       tokens5h: 2_310_000,
       observedAt: new Date(now - 4 * 60_000).toISOString(),
     },
-    processes: [
-      { pid: 48213, provider: "claude", cwd: "/Users/you/code/checkout-api", cpu: jitter(14), memoryMb: 312, startedAt: ago(38) },
-      { pid: 47790, provider: "codex", cwd: "/Users/you/code/landing-web", cpu: jitter(3), memoryMb: 148, startedAt: ago(12) },
-      { pid: 46102, provider: "claude", cwd: "/Users/you/code/infra", cpu: 0, memoryMb: 201, startedAt: ago(131) },
+    chats: [
+      { id: "c1", provider: "claude", title: "Contexto de la herramienta",
+        cwd: "\u2026\\claudecode-codex-widgetUsage", lastActivity: at(0), working: true,
+        fromClaude: false, contextPercent: 68, contextApprox: false, moreSubagents: 0,
+        subagents: [{ id: "a1", name: "Read graphify docs", kind: "web-fetch", lastActivity: at(0), working: true }] },
+      { id: "x1", provider: "codex", title: "graphify", cwd: null, lastActivity: at(-0.1),
+        working: true, fromClaude: true, contextPercent: 91, contextApprox: false, subagents: [], moreSubagents: 0 },
+      { id: "c2", provider: "claude", title: "landing", cwd: null, lastActivity: at(-2),
+        working: false, fromClaude: false, contextPercent: 23, contextApprox: false, subagents: [], moreSubagents: 0 },
     ],
   };
 }

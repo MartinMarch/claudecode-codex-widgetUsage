@@ -27,8 +27,8 @@ Se inicializó en un contenedor Linux sin pantalla. Allí:
 
 ## Reglas del proyecto
 
-- **No guardes, refresques ni reescribas el token OAuth del usuario.** Solo se lee. Si ha caducado, se muestra el mensaje que pide abrir `claude`.
-- No mandes datos del usuario a ningún sitio salvo la llamada de uso a Anthropic, que ya existe.
+- En Windows y Linux, el widget puede renovar el token OAuth de Claude. Guarda los campos renovados de forma atómica y conserva los demás campos del archivo. En macOS, el acceso al Llavero es de solo lectura.
+- Envía las credenciales únicamente a los endpoints de uso y renovación de Anthropic. Los registros de los chats se procesan localmente.
 - Si cambias `src-tauri/src/model.rs`, actualiza también `src/types.ts`.
 - Los textos de la interfaz están en español, en frase normal (sin MAYÚSCULAS), y dicen qué hacer cuando algo falla.
 - Diseño: un solo elemento llamativo, los arcos. No añadas tarjetas, sombras ni animaciones decorativas. La paleta y la tipografía están en las variables de `:root` en `src/styles.css`.

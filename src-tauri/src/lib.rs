@@ -1,10 +1,14 @@
+mod chats;
+mod chats_claude;
+mod chats_codex;
 mod claude;
 mod codex;
 mod model;
-mod procs;
+mod tail;
 
 use model::Snapshot;
 use serde::Serialize;
+use std::time::SystemTime;
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -15,20 +19,20 @@ use tokio::sync::Mutex;
 
 struct Sources {
     claude: Mutex<claude::ClaudeSource>,
-    procs: Mutex<procs::ProcessSource>,
 }
 
 #[tauri::command]
 async fn snapshot(sources: State<'_, Sources>) -> Result<Snapshot, String> {
     let claude = sources.claude.lock().await.read().await;
-    let codex = tauri::async_runtime::spawn_blocking(codex::read)
-        .await
-        .map_err(|e| e.to_string())?;
-    let processes = sources.procs.lock().await.read();
+    let (codex, chats) = tauri::async_runtime::spawn_blocking(|| {
+        (codex::read(), chats::read_all(SystemTime::now()))
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(Snapshot {
         claude,
         codex,
-        processes,
+        chats,
         taken_at: chrono::Utc::now().to_rfc3339(),
     })
 }
@@ -153,7 +157,6 @@ pub fn run() {
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .manage(Sources {
             claude: Mutex::new(claude::ClaudeSource::new()),
-            procs: Mutex::new(procs::ProcessSource::new()),
         })
         .setup(|app| {
             #[cfg(target_os = "macos")]

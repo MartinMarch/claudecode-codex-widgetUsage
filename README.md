@@ -59,16 +59,16 @@ Windows (PowerShell):
 
 ## De dónde salen los datos
 
-Todo se lee en local. El widget no necesita claves de API.
+Los registros se procesan en local. El widget usa tu sesión de Claude Code para consultar los límites de Anthropic y funciona sin claves de API.
 
 | Dato | Fuente |
 |---|---|
 | Límites de Codex | `~/.codex/sessions/**/rollout-*.jsonl`: el último evento `token_count` trae `rate_limits` |
-| Límites de Claude Code | El mismo endpoint que usa `/usage` en Claude Code, con el login que ya tienes (Llavero en macOS, `~/.claude/.credentials.json` en Linux y Windows). Se consulta como mucho una vez por minuto. |
+| Límites de Claude Code | El mismo endpoint que usa `/usage` en Claude Code, con el login que ya tienes (Llavero en macOS, `~/.claude/.credentials.json` en Linux y Windows). Las consultas se guardan en caché durante un minuto. |
 | Tokens de Claude Code | `~/.claude/projects/**/*.jsonl` |
-| Procesos | La lista de procesos del sistema (`sysinfo`) |
+| Chats activos | Metadatos de los registros de Claude Code y Codex con actividad en los últimos 10 minutos |
 
-El endpoint de límites de Claude no es una API pública y podría cambiar. Si falla, el widget lo indica y sigue mostrando los tokens locales. El widget nunca renueva ni modifica tu token: si ha caducado, te pide que abras `claude` una vez.
+El endpoint de límites de Claude es privado y podría cambiar. Si falla, el widget lo indica y sigue mostrando los tokens locales. En Windows y Linux, el widget puede renovar el token con Anthropic y guardar los campos renovados de forma atómica, conservando el resto del archivo de credenciales. Si falla la renovación, te pide abrir Claude Code y volver a iniciar sesión. En macOS, el acceso al Llavero es de solo lectura y el widget te pide abrir `claude` cuando caduca la sesión.
 
 Puedes cambiar las carpetas con las variables `CLAUDE_CONFIG_DIR` y `CODEX_HOME`.
 
@@ -106,6 +106,6 @@ src-tauri/src/
   lib.rs             ventana, cristal nativo, bandeja, autoarranque
   claude.rs          límites y tokens de Claude Code
   codex.rs           límites y tokens de Codex
-  procs.rs           detección de sesiones en marcha
+  chats.rs           selección de chats activos de Claude y Codex
   model.rs           tipos compartidos (espejo de src/types.ts)
 ```

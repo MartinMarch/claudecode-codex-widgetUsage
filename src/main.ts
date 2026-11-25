@@ -3,9 +3,9 @@ import "@fontsource-variable/manrope";
 import "./styles.css";
 
 import { fetchPlatform, fetchSnapshot, fitWindow, hideWindow } from "./api";
-import { duration, folder, projection, since, tokens } from "./format";
+import { duration, projection, since, tokens } from "./format";
 import { gauge } from "./gauge";
-import type { AgentProcess, ProviderUsage, Snapshot } from "./types";
+import type { ProviderUsage, Snapshot } from "./types";
 
 const POLL_MS = 20_000;
 const NAMES = { claude: "Claude Code", codex: "Codex" } as const;
@@ -68,21 +68,7 @@ function card(u: ProviderUsage): string {
   </section>`;
 }
 
-function proc(p: AgentProcess): string {
-  const up = Date.now() - p.startedAt * 1000;
-  const busy = p.cpu >= 1;
-  return `
-  <li class="proc proc-${p.provider}${busy ? " is-busy" : ""}" title="${esc(p.cwd ?? "")} (PID ${p.pid})">
-    <span class="dot" aria-hidden="true"></span>
-    <span class="proc-name">${esc(folder(p.cwd))}</span>
-    <span class="proc-tool">${NAMES[p.provider]}</span>
-    <span class="proc-stat">${busy ? `${Math.round(p.cpu)} % CPU` : "en espera"}</span>
-    <span class="proc-up">${duration(up)}</span>
-  </li>`;
-}
-
 function render(s: Snapshot) {
-  const procs = s.processes;
   const pill = (u: ProviderUsage) =>
     `<span class="pill-item pill-${u.provider}"><i></i>${pct(u.primary?.usedPercent)}<small>%</small></span>`;
 
@@ -101,14 +87,8 @@ function render(s: Snapshot) {
   </header>
   <div class="meters">${card(s.claude)}${card(s.codex)}</div>
   <section class="procs" aria-label="Sesiones en marcha">
-    <h2 class="procs-head">En marcha <span>${procs.length}</span></h2>
-    ${
-      procs.length
-        ? `<ul>${procs.slice(0, 5).map(proc).join("")}</ul>${
-            procs.length > 5 ? `<p class="more">y ${procs.length - 5} más</p>` : ""
-          }`
-        : `<p class="empty">Ninguna sesión abierta. Lanza <code>claude</code> o <code>codex</code> en una terminal y aparecerá aquí.</p>`
-    }
+    <h2 class="procs-head">En marcha <span>${s.chats.length}</span></h2>
+    ${s.chats.length ? "" : `<p class="empty">Ninguna sesión abierta. Lanza <code>claude</code> o <code>codex</code> en una terminal y aparecerá aquí.</p>`}
   </section>`;
 
   if (firstPaint) {

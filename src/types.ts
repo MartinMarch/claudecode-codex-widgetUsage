@@ -20,20 +20,32 @@ export interface ProviderUsage {
   observedAt: string | null;
 }
 
-export interface AgentProcess {
-  pid: number;
+export interface Subagent {
+  id: string;
+  name: string;
+  kind: string | null;
+  lastActivity: string;
+  working: boolean;
+}
+
+export interface Chat {
+  id: string;
   provider: Provider;
+  title: string;
   cwd: string | null;
-  cpu: number;
-  memoryMb: number;
-  /** Unix epoch seconds */
-  startedAt: number;
+  lastActivity: string;
+  working: boolean;
+  fromClaude: boolean;
+  contextPercent: number | null;
+  contextApprox: boolean;
+  subagents: Subagent[];
+  moreSubagents: number;
 }
 
 export interface Snapshot {
   claude: ProviderUsage;
   codex: ProviderUsage;
-  processes: AgentProcess[];
+  chats: Chat[];
   takenAt: string;
 }
 
