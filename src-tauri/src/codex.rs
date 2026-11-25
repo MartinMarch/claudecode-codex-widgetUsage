@@ -67,8 +67,18 @@ fn parse_window(v: &Value, observed: DateTime<Utc>, default_minutes: u32) -> Opt
     let resets_at = if let Some(secs) = v.get("resets_at").and_then(Value::as_i64) {
         Utc.timestamp_opt(secs, 0).single()
     } else { v.get("resets_in_seconds").and_then(Value::as_i64).map(|secs| observed + Duration::seconds(secs)) };
+    let mut used_percent = v.get("used_percent").and_then(Value::as_f64);
+    // The log only updates when Codex runs. If the window has rolled over since,
+    // the logged percentage is stale: the window started again from zero.
+    let resets_at = match resets_at {
+        Some(t) if t <= Utc::now() => {
+            used_percent = used_percent.map(|_| 0.0);
+            None
+        }
+        other => other,
+    };
     Some(LimitWindow {
-        used_percent: v.get("used_percent").and_then(Value::as_f64),
+        used_percent,
         resets_at: resets_at.map(|t| t.to_rfc3339()),
         window_minutes: minutes,
     })
@@ -157,7 +167,7 @@ mod tests {
 
     #[test]
     fn window_with_relative_reset() {
-        let observed = Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap();
+        let observed = Utc::now();
         let w = parse_window(
             &json!({"used_percent": 42.5, "window_minutes": 299, "resets_in_seconds": 600}),
             observed,
@@ -166,16 +176,32 @@ mod tests {
         .unwrap();
         assert_eq!(w.used_percent, Some(42.5));
         assert_eq!(w.window_minutes, 299);
-        assert_eq!(w.resets_at.unwrap(), "2026-01-01T12:10:00+00:00");
+        assert_eq!(w.resets_at.unwrap(), (observed + Duration::seconds(600)).to_rfc3339());
     }
 
     #[test]
     fn window_with_absolute_reset_and_missing_minutes() {
         let observed = Utc::now();
-        let w = parse_window(&json!({"used_percent": 3.0, "resets_at": 1767225600}), observed, 10_080).unwrap();
+        // 2100-01-01: always in the future.
+        let w = parse_window(&json!({"used_percent": 3.0, "resets_at": 4102444800i64}), observed, 10_080).unwrap();
         assert_eq!(w.window_minutes, 10_080);
-        assert_eq!(w.resets_at.unwrap(), "2026-01-01T00:00:00+00:00");
+        assert_eq!(w.used_percent, Some(3.0));
+        assert_eq!(w.resets_at.unwrap(), "2100-01-01T00:00:00+00:00");
         assert!(parse_window(&Value::Null, observed, 300).is_none());
+    }
+
+    #[test]
+    fn window_that_already_reset_reads_as_zero() {
+        // Real shape from Codex 0.171 (`resets_at` in Unix seconds), with a past reset.
+        let observed = Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap();
+        let w = parse_window(
+            &json!({"used_percent": 15.0, "window_minutes": 300, "resets_at": 1767272400}),
+            observed,
+            300,
+        )
+        .unwrap();
+        assert_eq!(w.used_percent, Some(0.0));
+        assert!(w.resets_at.is_none());
     }
 
     #[test]
@@ -188,7 +214,7 @@ mod tests {
             json!({"timestamp": ts.to_rfc3339(), "type": "event_msg", "payload": {
                 "type": "token_count",
                 "info": {"last_token_usage": {"total_tokens": 1000}},
-                "rate_limits": {"primary": {"used_percent": pct, "window_minutes": 300, "resets_in_seconds": 60},
+                "rate_limits": {"primary": {"used_percent": pct, "window_minutes": 300, "resets_in_seconds": 3600},
                                 "secondary": {"used_percent": 7.0, "window_minutes": 10080, "resets_in_seconds": 3600}}
             }})
             .to_string()

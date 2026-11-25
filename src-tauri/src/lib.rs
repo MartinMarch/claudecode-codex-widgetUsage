@@ -63,6 +63,9 @@ fn apply_glass(window: &WebviewWindow) -> bool {
     #[cfg(target_os = "windows")]
     {
         use window_vibrancy::{apply_acrylic, apply_blur};
+        // On Windows 11 the system acrylic ignores this tint and follows the window
+        // theme instead, so the window is pinned to the dark theme in tauri.conf.json;
+        // otherwise a light Windows theme washes the glass out grey.
         return apply_acrylic(window, Some((16, 20, 32, 120))).is_ok()
             || apply_blur(window, Some((16, 20, 32, 120))).is_ok();
     }
@@ -77,7 +80,15 @@ const WIDGET_WIDTH: f64 = 340.0;
 
 /// Docks the widget in the top-right corner of the screen it opens on.
 fn place_top_right(window: &WebviewWindow) {
-    let Ok(Some(monitor)) = window.current_monitor() else { return };
+    // A window that has never been shown may not report a monitor yet (seen on Windows).
+    let Some(monitor) = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten())
+    else {
+        return;
+    };
     let scale = monitor.scale_factor();
     // A hidden window can report 0×0 on some platforms; fall back to the configured width.
     let width = window

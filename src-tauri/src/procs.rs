@@ -24,6 +24,10 @@ fn classify(name: &str, exe: &str, cmd: &[String]) -> Option<Provider> {
     let exe_l = exe.to_lowercase();
     if exe_l.contains("claude.app")
         || exe_l.contains("anthropicclaude")
+        // Windows Store builds of the desktop apps, and the Claude Code copy the
+        // Claude desktop app bundles under `Claude-Data\anthropicpbc.claude_…`.
+        || exe_l.contains("anthropicpbc.claude")
+        || exe_l.contains("\\windowsapps\\")
         || exe_l.contains("codex.app")
         || exe_l.contains("agent-gauge")
         || exe_l.contains("agent gauge")
@@ -132,6 +136,22 @@ mod tests {
     fn ignores_desktop_apps_and_unrelated() {
         assert_eq!(
             classify("Claude", "/Applications/Claude.app/Contents/MacOS/Claude", &s(&[])),
+            None
+        );
+        assert_eq!(
+            classify(
+                "claude.exe",
+                "C:\\Program Files\\WindowsApps\\AnthropicPBC.Claude_6.1.0.0_x64__abc\\app\\Claude.exe",
+                &s(&[])
+            ),
+            None
+        );
+        assert_eq!(
+            classify(
+                "claude.exe",
+                "C:\\Users\\me\\AppData\\Local\\Claude-Data\\anthropicpbc.claude_abc\\claude-code\\2.1.0\\x\\claude.exe",
+                &s(&[])
+            ),
             None
         );
         assert_eq!(classify("zsh", "/bin/zsh", &s(&["zsh", "-c", "echo claude"])), None);
