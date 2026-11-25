@@ -254,3 +254,30 @@ Spec §6. Backend only; Task 10 (Claude) does the UI.
 **Tests (failing first):** `activity` classifies 10 s / 5 min / 2 h / 25 h as working / awake / asleep / none; finished Claude subagent within 24 h is listed asleep; remote `parse` reads `H` and sets `env_id`; grouping keeps same folder on two envs as two projects; `adopt_nested` does not cross envs; per-env cap of 5; ssh config alias fallback naming.
 
 Done when `cargo test`, `cargo clippy --all-targets -- -D warnings` and `npm run build` pass. Do not touch `src/styles.css`, `src/main.ts` beyond compiling, `src/critters.ts`.
+
+### Task 11: Activity log and manual refresh (Codex: backend; Claude: UI)
+
+Why: the user wants to trust the numbers. A refresh button forces a new reading; an "i" panel shows what each source did and why something failed.
+
+**Backend (Codex):**
+- New `src-tauri/src/activity.rs`: a global ring buffer (max 80) of
+  ```rust
+  #[derive(Clone, Serialize)] #[serde(rename_all = "camelCase")]
+  pub struct LogEntry { pub at: String /* RFC 3339 */, pub source: String, pub level: LogLevel, pub message: String, pub count: u32 }
+  #[derive(Clone, Copy, Serialize, PartialEq)] #[serde(rename_all = "lowercase")]
+  pub enum LogLevel { Ok, Warn, Error }
+  pub fn record(source: &str, level: LogLevel, message: impl Into<String>)
+  pub fn entries() -> Vec<LogEntry> // newest first
+  ```
+  If the newest entry of that `source` has the same `level` and `message`, update its `at` and `count += 1` instead of adding a row (so a poll every minute does not flood it).
+- Sources and what to record (Spanish, sentence case, no tokens, no conversation text, no e-mail):
+  - `"Claude"` (claude.rs): each remote attempt → Ok "Uso leído: {p} % (5 h), {w} % (semana)"; 429 → Warn "Anthropic limita las consultas (429). Próximo intento en {n} min"; other errors → Error with the user-facing message; token refresh → Ok "Login renovado" / Error "No se pudo renovar el login".
+  - `"Codex"` (codex_live.rs): Ok "Uso leído: {p} % (5 h), {w} % (semana)"; HTTP error → Error "OpenAI respondió {status}"; no auth file → Warn "No hay login de Codex (`codex login`)"; network → Error "Sin conexión con OpenAI".
+  - `"Nube"` (cloud_claude.rs): Ok "{n} sesiones en la nube"; 429 → Warn; errors → Error.
+  - `"SSH {host}"` (chats_remote.rs): Ok "{n} sesiones de Codex en {hostname}"; failure → Error "No se pudo entrar por SSH. ¿Está autorizada tu clave?"; timeout → Error "El servidor no respondió en 8 s".
+  - `"App"`: Ok "Widget iniciado" at startup; Ok "Actualización manual" on refresh.
+- Manual refresh: Tauri command `refresh()` (async). It records "Actualización manual" and makes the next `snapshot` skip every cache **except** active 429 backoffs (Claude usage, Nube): Claude `next_attempt = None` unless backing off; `CodexLive` drops its cached reading; `CloudClaude` `next_attempt = None` unless backing off; `chats_remote` clears its host cache. Expose `pub fn force_next(&mut self)` on each source.
+- Tauri command `logs() -> Vec<LogEntry>`. Register both commands in `invoke_handler`.
+- Tests: dedupe (same message twice → one row, count 2; different → two rows); ring buffer caps at 80; `force_next` does not clear an active 429 backoff for Claude.
+
+**Frontend (Claude):** `src/types.ts` `LogEntry`; `src/api.ts` `refreshNow()` and `fetchLogs()` (browser mock returns samples); header buttons ↻ and i; the i panel.
