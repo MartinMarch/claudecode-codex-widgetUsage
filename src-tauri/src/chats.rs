@@ -155,6 +155,10 @@ pub fn read_all(now: SystemTime) -> Vec<Project> {
     if let Some(home) = codex::home() {
         all.extend(chats_codex::read(&home, now));
     }
+    let now_ms = now
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+    all.extend(crate::chats_remote::read(now_ms));
     group(all)
 }
 

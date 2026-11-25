@@ -1,6 +1,7 @@
 mod chats;
 mod chats_claude;
 mod chats_codex;
+mod chats_remote;
 mod claude;
 mod codex;
 mod codex_live;
